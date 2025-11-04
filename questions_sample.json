@@ -1,0 +1,74 @@
+{
+    "meta": {
+        "title": "Sample Trivia Set",
+        "author": "Spec Example",
+        "createdAt": "2025-11-03T12:00:00Z",
+        "defaultTimeLimit": 45
+    },
+    "rounds": [
+        {
+            "id": "r1",
+            "pointOptions": [
+                3,
+                5,
+                7
+            ],
+            "timeLimitSeconds": 45,
+            "questions": [
+                {
+                    "id": "q1",
+                    "type": "mcq",
+                    "text": "Which planet is known as the Red Planet?",
+                    "choices": [
+                        "Earth",
+                        "Mars",
+                        "Venus",
+                        "Jupiter"
+                    ],
+                    "correctChoiceIndex": 1,
+                    "explanation": "Mars is the Red Planet due to its iron oxide-rich soil."
+                },
+                {
+                    "id": "q2",
+                    "type": "open",
+                    "text": "Name the author of 'Pride and Prejudice'.",
+                    "answer": "Jane Austen",
+                    "explanation": "Written by Jane Austen in 1813."
+                },
+                {
+                    "id": "q3",
+                    "type": "mcq",
+                    "text": "Which of the following are prime numbers?",
+                    "choices": [
+                        "4",
+                        "5",
+                        "6",
+                        "7"
+                    ],
+                    "correctChoiceIndices": [
+                        1,
+                        3
+                    ],
+                    "explanation": "5 and 7 are prime."
+                }
+            ]
+        },
+        {
+            "id": "final",
+            "pointOptions": [
+                0
+            ],
+            "timeLimitSeconds": 60,
+            "isFinal": true,
+            "questions": [
+                {
+                    "id": "q_final_1",
+                    "type": "open",
+                    "text": "Final question: What is the capital of France?",
+                    "answer": "Paris",
+                    "explanation": "Paris is the capital of France."
+                }
+            ]
+        }
+    ]
+}
