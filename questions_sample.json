@@ -11,7 +11,8 @@
             "pointOptions": [
                 3,
                 5,
-                7
+                7,
+                10
             ],
             "timeLimitSeconds": 45,
             "questions": [
@@ -50,6 +51,33 @@
                         3
                     ],
                     "explanation": "5 and 7 are prime."
+                },
+                {
+                    "id": "q4",
+                    "type": "numeric",
+                    "text": "What is the population of Tokyo (in millions)?",
+                    "explanation": "Tokyo has approximately 37.4 million people in its metropolitan area.",
+                    "numericConfig": {
+                        "correctAnswer": 37.4,
+                        "ranges": [
+                            {
+                                "maxPercentOff": 5,
+                                "pointsPercent": 100
+                            },
+                            {
+                                "maxPercentOff": 10,
+                                "pointsPercent": 80
+                            },
+                            {
+                                "maxPercentOff": 20,
+                                "pointsPercent": 50
+                            },
+                            {
+                                "maxPercentOff": 30,
+                                "pointsPercent": 25
+                            }
+                        ]
+                    }
                 }
             ]
         },

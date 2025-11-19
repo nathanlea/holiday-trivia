@@ -165,67 +165,57 @@ function GamemasterTeamsPage(): JSX.Element {
 
             {gmState ? (
                 gmState.scoreboard.length ? (
-                    <ul className="team-management-list">
+                    <div className="compact-team-list">
                         {gmState.scoreboard.map((entry) => {
                             const draft = getTeamAdjustmentDraft(entry.teamId);
                             const adjustKey = `${entry.teamId}:adjust`;
                             const removeKey = `${entry.teamId}:remove`;
                             const isAdjusting = pendingTeamAction === adjustKey;
                             const isRemoving = pendingTeamAction === removeKey;
+                            const canApply = draft.amount && Number.isFinite(Number(draft.amount)) && Number(draft.amount) !== 0;
                             return (
-                                <li key={entry.teamId} className="team-management-item">
-                                    <div className="team-management-info">
-                                        <h4>{entry.name}</h4>
-                                        <span className="team-management-score">Score: {entry.score}</span>
+                                <div key={entry.teamId} className="compact-team-row">
+                                    <div className="compact-team-info">
+                                        <span className="compact-team-name">{entry.name}</span>
+                                        <span className="compact-team-score">{entry.score}</span>
                                     </div>
-                                    <div className="team-management-controls">
-                                        <div className="team-management-adjust">
-                                            <label className="sr-only" htmlFor={`adjust-amount-${entry.teamId}`}>
-                                                Point adjustment for {entry.name}
-                                            </label>
-                                            <input
-                                                id={`adjust-amount-${entry.teamId}`}
-                                                type="number"
-                                                className="team-management-input"
-                                                value={draft.amount}
-                                                onChange={(event) => updateTeamAdjustmentDraft(entry.teamId, 'amount', event.target.value)}
-                                                placeholder="+10"
-                                                step="1"
-                                            />
-                                            <label className="sr-only" htmlFor={`adjust-note-${entry.teamId}`}>
-                                                Reason for adjustment for {entry.name}
-                                            </label>
-                                            <input
-                                                id={`adjust-note-${entry.teamId}`}
-                                                type="text"
-                                                className="team-management-input team-management-input--note"
-                                                value={draft.note}
-                                                onChange={(event) => updateTeamAdjustmentDraft(entry.teamId, 'note', event.target.value)}
-                                                placeholder="Reason (optional)"
-                                                maxLength={80}
-                                            />
-                                            <button
-                                                type="button"
-                                                className="ghost-button ghost-button--success"
-                                                disabled={isAdjusting}
-                                                onClick={() => handleApplyAdjustment(entry.teamId, entry.name)}
-                                            >
-                                                {isAdjusting ? 'Applying…' : 'Apply'}
-                                            </button>
-                                        </div>
+                                    <div className="compact-team-controls">
+                                        <input
+                                            type="number"
+                                            className="compact-team-input"
+                                            value={draft.amount}
+                                            onChange={(event) => updateTeamAdjustmentDraft(entry.teamId, 'amount', event.target.value)}
+                                            placeholder="+10"
+                                            step="1"
+                                            onKeyDown={(event) => {
+                                                if (event.key === 'Enter' && canApply && !isAdjusting) {
+                                                    handleApplyAdjustment(entry.teamId, entry.name);
+                                                }
+                                            }}
+                                        />
                                         <button
                                             type="button"
-                                            className="ghost-button ghost-button--danger"
+                                            className="compact-team-apply"
+                                            disabled={isAdjusting || !canApply}
+                                            onClick={() => handleApplyAdjustment(entry.teamId, entry.name)}
+                                            title="Apply points adjustment"
+                                        >
+                                            {isAdjusting ? '…' : '✓'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="compact-team-remove"
                                             disabled={isRemoving}
                                             onClick={() => handleRemoveTeam(entry.teamId, entry.name)}
+                                            title={`Remove ${entry.name}`}
                                         >
-                                            {isRemoving ? 'Removing…' : 'Remove'}
+                                            {isRemoving ? '…' : '×'}
                                         </button>
                                     </div>
-                                </li>
+                                </div>
                             );
                         })}
-                    </ul>
+                    </div>
                 ) : (
                     <p className="empty-state">No teams to manage yet.</p>
                 )

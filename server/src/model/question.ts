@@ -19,6 +19,7 @@ export class Question extends Model<InferAttributes<Question>, InferCreationAttr
     declare choicesJson: string | null;
     declare correctJson: string | null;
     declare explanation: string | null;
+    declare numericConfigJson: string | null;
 
     declare round?: NonAttribute<Round>;
     declare results?: NonAttribute<SubmissionResult[]>;
@@ -62,6 +63,11 @@ export function initQuestionModel(sequelize: Sequelize): typeof Question {
             explanation: {
                 type: DataTypes.TEXT,
                 allowNull: true,
+            },
+            numericConfigJson: {
+                type: DataTypes.TEXT,
+                allowNull: true,
+                field: 'numeric_config_json',
             },
         },
         {

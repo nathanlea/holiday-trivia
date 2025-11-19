@@ -59,56 +59,6 @@ export async function initializeDatabase(): Promise<void> {
     await sequelize.query('PRAGMA journal_mode = WAL;');
     await sequelize.query('PRAGMA foreign_keys = ON;');
     await sequelize.sync({ alter: true });
-    await normalizeTeamIndexes();
 }
 
 export { Game, Question, Round, Submission, SubmissionResult, Team, Wager };
-
-async function normalizeTeamIndexes(): Promise<void> {
-    const queryInterface = sequelize.getQueryInterface();
-    const indexes = (await queryInterface.showIndex('teams')) as Array<{
-        name: string;
-        unique: boolean;
-        fields?: Array<
-            | string
-            | {
-                attribute?: string;
-                name?: string;
-                field?: string;
-            }
-        >;
-    }>;
-
-    let hasCompositeIndex = false;
-
-    for (const index of indexes) {
-        const fields = (index.fields ?? []).map((field) => {
-            if (typeof field === 'string') {
-                return field;
-            }
-            return field.attribute ?? field.name ?? field.field ?? '';
-        });
-        const normalizedFields = fields.map((field: string) => field.replace(/`/g, ''));
-
-        if (index.unique && normalizedFields.length === 2 && normalizedFields.includes('game_id') && normalizedFields.includes('name')) {
-            hasCompositeIndex = true;
-            continue;
-        }
-
-        if (index.unique && normalizedFields.length === 1 && (normalizedFields[0] === 'game_id' || normalizedFields[0] === 'name')) {
-            const indexName = index.name ?? '';
-            if (!indexName || indexName.startsWith('sqlite_autoindex')) {
-                continue;
-            }
-            await queryInterface.removeIndex('teams', indexName);
-        }
-    }
-
-    if (!hasCompositeIndex) {
-        await queryInterface.addIndex('teams', {
-            fields: ['game_id', 'name'],
-            unique: true,
-            name: 'teams_game_id_name_unique',
-        });
-    }
-}

@@ -186,7 +186,17 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
             const next: Record<string, AnswerDraft> = {};
             currentRound.questions.forEach((question) => {
                 const existing = prev[question.id] ?? { response: '', pointValue: null };
-                next[question.id] = existing;
+                // Auto-select point value if there's only 1 question and 1 point option
+                const autoSelectPointValue =
+                    !currentRound.isFinal &&
+                    currentRound.questions.length === 1 &&
+                    currentRound.pointOptions.length === 1 &&
+                    existing.pointValue === null;
+
+                next[question.id] = {
+                    response: existing.response,
+                    pointValue: autoSelectPointValue ? currentRound.pointOptions[0] : existing.pointValue,
+                };
             });
             return next;
         });

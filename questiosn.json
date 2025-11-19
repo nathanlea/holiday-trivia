@@ -1,0 +1,113 @@
+{
+    "meta": {
+        "title": "Fitness Holiday Trivia 2025",
+        "author": "Fitness Holiday Team",
+        "createdAt": "2025-11-12T00:00:00Z",
+        "defaultTimeLimit": 60
+    },
+    "rounds": [
+        {
+            "id": "r1",
+            "pointOptions": [
+                3,
+                5,
+                7
+            ],
+            "timeLimitSeconds": 45,
+            "questions": [
+                {
+                    "id": "q1",
+                    "type": "open",
+                    "text": "What state has the most official “dropped objects” on New Year's Eve, including a stuffed beaver, an 100-pound model of a peep, a gazebo, a bag of potato rolls, a pair of pickles, a Hershey's kiss, and a 100lb stick of bologna?",
+                    "answer": "Pennsylvania"
+                },
+                {
+                    "id": "q2",
+                    "type": "open",
+                    "text": "March 8 is International Women's Day. How is this day celebrated in China?",
+                    "answer": "Half day off for women"
+                },
+                {
+                    "id": "q3",
+                    "type": "open",
+                    "text": "In a 1980s April Fools' Day prank, BBC World Service announced that the Big Ben clock tower was going to be changed to what?",
+                    "answer": "Digital clock"
+                }
+            ]
+        },
+        {
+            "id": "r2",
+            "pointOptions": [
+                7,
+                9,
+                11
+            ],
+            "timeLimitSeconds": 60,
+            "questions": [
+                {
+                    "id": "q1",
+                    "type": "open",
+                    "text": "Which country introduced the Easter Bunny tradition to America via immigrants? ",
+                    "answer": "Germany"
+                },
+                {
+                    "id": "q2",
+                    "type": "open",
+                    "text": "Complete the quote: “The ________ day of July 1776 will be the most memorable epoch in the history of America. I am apt to believe that it will be celebrated by succeeding generations as the great anniversary festival.” -John Adams",
+                    "answer": "Second"
+                },
+                {
+                    "id": "q3",
+                    "type": "open",
+                    "text": "Which state hosts a holiday named 'Frozen Dead Guy Days', inspired by the cryogenically preserved body of a man named Bredo Morstøl?",
+                    "answer": "Colorado"
+                }
+            ]
+        },
+        {
+            "id": "r2",
+            "pointOptions": [
+                9,
+                11,
+                13
+            ],
+            "timeLimitSeconds": 60,
+            "questions": [
+                {
+                    "id": "q1",
+                    "type": "open",
+                    "text": "The Uniform Monday Holiday Act, which was intended to benefit both the economy and the American public by providing more time for recreational and cultural activities, moved which four federal holidays to Monday?",
+                    "answer": "Washington's Birthday, Memorial Day, Labor Day, Columbus Day"
+                },
+                {
+                    "id": "q2",
+                    "type": "open",
+                    "text": "In Campbell's' 2024 “State of the Sides” survey, forty-five states chose what dish as their favorite Thanksgiving side?",
+                    "answer": "Mashed potatoes"
+                },
+                {
+                    "id": "q3",
+                    "type": "open",
+                    "text": "This was an early advertisement for what ubiquitous holiday candy?",
+                    "answer": "Candy corn"
+                }
+            ]
+        },
+        {
+            "id": "final",
+            "pointOptions": [
+                0
+            ],
+            "timeLimitSeconds": 60,
+            "isFinal": true,
+            "questions": [
+                {
+                    "id": "q_final_1",
+                    "type": "open",
+                    "text": "What was Grayson's 100m sprint time in the snowman suit?",
+                    "answer": "38.5 seconds"
+                }
+            ]
+        }
+    ]
+}

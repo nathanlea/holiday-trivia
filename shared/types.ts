@@ -16,15 +16,24 @@ export interface GameSummary {
     createdAt: string;
 }
 
+export interface NumericScoringConfig {
+    correctAnswer: number;
+    ranges: Array<{
+        maxPercentOff: number;
+        pointsPercent: number;
+    }>;
+}
+
 export interface RoundQuestionView {
     id: string;
     order: number;
-    type: 'mcq' | 'open';
+    type: 'mcq' | 'open' | 'numeric';
     text: string;
     choices?: string[];
     explanation?: string | null;
     correctChoiceIndices?: number[] | null;
     correctAnswerText?: string | null;
+    numericConfig?: NumericScoringConfig | null;
 }
 
 export type RoundMode = 'standard' | 'final' | 'wager';

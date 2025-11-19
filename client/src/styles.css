@@ -922,6 +922,108 @@ button:disabled {
     }
 }
 
+/* Compact team management layout */
+.compact-team-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.compact-team-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.5);
+    border: 1px solid rgba(4, 120, 87, 0.15);
+}
+
+.compact-team-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex: 1;
+}
+
+.compact-team-name {
+    font-weight: 600;
+    color: #0f172a;
+    min-width: 120px;
+}
+
+.compact-team-score {
+    font-weight: 700;
+    color: var(--holiday-green);
+    background: rgba(16, 185, 129, 0.15);
+    padding: 0.25rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    min-width: 50px;
+    text-align: center;
+}
+
+.compact-team-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.compact-team-input {
+    width: 90px;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid rgba(15, 23, 42, 0.2);
+    border-radius: 6px;
+    font-size: 0.95rem;
+    text-align: center;
+}
+
+.compact-team-apply,
+.compact-team-remove {
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 6px;
+    font-size: 1.2rem;
+    font-weight: bold;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.compact-team-apply {
+    background: var(--holiday-green);
+    color: white;
+}
+
+.compact-team-apply:hover:not(:disabled) {
+    background: #047857;
+    transform: scale(1.05);
+}
+
+.compact-team-apply:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.compact-team-remove {
+    background: rgba(220, 38, 38, 0.1);
+    color: #dc2626;
+}
+
+.compact-team-remove:hover:not(:disabled) {
+    background: #dc2626;
+    color: white;
+    transform: scale(1.05);
+}
+
+.compact-team-remove:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
 .scoreboard-page .scoreboard-table,
 .scoreboard-display .scoreboard-table {
     background: rgba(255, 255, 255, 0.92);
@@ -1438,6 +1540,16 @@ button:disabled {
     white-space: pre-wrap;
 }
 
+.submission-answer-hint {
+    margin: 0.5rem 0 0;
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--holiday-green);
+    font-size: 0.9rem;
+    font-style: italic;
+}
+
 .field--compact {
     gap: 0.35rem;
 }
@@ -1648,6 +1760,7 @@ button:disabled {
         gap: 0.65rem;
     }
 }
+
 /* Toast Notifications */
 .toast-notification {
     position: fixed;
@@ -1670,6 +1783,7 @@ button:disabled {
         transform: translateX(100%);
         opacity: 0;
     }
+
     to {
         transform: translateX(0);
         opacity: 1;
@@ -1680,6 +1794,7 @@ button:disabled {
     from {
         opacity: 1;
     }
+
     to {
         opacity: 0;
     }
@@ -1809,9 +1924,12 @@ button:disabled {
 }
 
 @keyframes pulse {
-    0%, 100% {
+
+    0%,
+    100% {
         opacity: 1;
     }
+
     50% {
         opacity: 0.6;
     }

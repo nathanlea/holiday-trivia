@@ -34,11 +34,13 @@ export function initSubmissionResultModel(sequelize: Sequelize): typeof Submissi
                 type: DataTypes.STRING,
                 allowNull: false,
                 field: 'submission_id',
+                unique: false,
             },
             questionId: {
                 type: DataTypes.STRING,
                 allowNull: false,
                 field: 'question_id',
+                unique: false,
             },
             assignedPoint: {
                 type: DataTypes.INTEGER,

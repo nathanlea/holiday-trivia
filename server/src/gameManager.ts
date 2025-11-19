@@ -51,13 +51,20 @@ interface ImportMeta {
 
 interface ImportQuestion {
     id?: string;
-    type: 'mcq' | 'open';
+    type: 'mcq' | 'open' | 'numeric';
     text: string;
     choices?: string[];
     correctChoiceIndex?: number;
     correctChoiceIndices?: number[];
-    answer?: string;
+    answer?: string | number;
     explanation?: string;
+    numericConfig?: {
+        correctAnswer: number;
+        ranges: Array<{
+            maxPercentOff: number;
+            pointsPercent: number;
+        }>;
+    };
 }
 
 interface ImportRound {
@@ -191,6 +198,7 @@ export class GameManager {
                         const storedQuestionId = `${finalRoundId}-${questionId}`;
                         const choicesJson = question.choices ? JSON.stringify(question.choices) : null;
                         const correctJson = this.encodeCorrectAnswer(question);
+                        const numericConfigJson = question.numericConfig ? JSON.stringify(question.numericConfig) : null;
 
                         await Question.create(
                             {
@@ -202,6 +210,7 @@ export class GameManager {
                                 choicesJson,
                                 correctJson,
                                 explanation: question.explanation ?? null,
+                                numericConfigJson,
                             },
                             { transaction }
                         );
@@ -235,6 +244,7 @@ export class GameManager {
                         const storedQuestionId = `${roundId}-${questionId}`;
                         const choicesJson = question.choices ? JSON.stringify(question.choices) : null;
                         const correctJson = this.encodeCorrectAnswer(question);
+                        const numericConfigJson = question.numericConfig ? JSON.stringify(question.numericConfig) : null;
 
                         await Question.create(
                             {
@@ -246,6 +256,7 @@ export class GameManager {
                                 choicesJson,
                                 correctJson,
                                 explanation: question.explanation ?? null,
+                                numericConfigJson,
                             },
                             { transaction }
                         );
@@ -475,18 +486,72 @@ export class GameManager {
                 const answer = answerMap.get(question.id)!;
                 const assignedPoint = round.isFinal ? wager?.amount ?? 0 : answer.pointValue ?? 0;
 
+                // Auto-score numeric questions
+                let status: 'pending' | 'correct' | 'incorrect' = 'pending';
+                let awardedPoints = 0;
+
+                if (question.type === 'numeric' && question.numericConfigJson) {
+                    const numericConfig = JSON.parse(question.numericConfigJson);
+                    const submittedValue = parseFloat(answer.response);
+
+                    if (Number.isFinite(submittedValue) && Number.isFinite(numericConfig.correctAnswer)) {
+                        const percentOff = Math.abs((submittedValue - numericConfig.correctAnswer) / numericConfig.correctAnswer) * 100;
+
+                        // Find the applicable scoring range
+                        const sortedRanges = [...numericConfig.ranges].sort((a, b) => a.maxPercentOff - b.maxPercentOff);
+                        let pointsPercent = 0;
+
+                        for (const range of sortedRanges) {
+                            if (percentOff <= range.maxPercentOff) {
+                                pointsPercent = range.pointsPercent;
+                                break;
+                            }
+                        }
+
+                        if (pointsPercent > 0) {
+                            status = 'correct';
+                            awardedPoints = Math.round((assignedPoint * pointsPercent) / 100);
+                        } else {
+                            status = 'incorrect';
+                            awardedPoints = round.isFinal ? -assignedPoint : 0;
+                        }
+                    }
+                }
+
                 await SubmissionResult.create(
                     {
                         id: randomUUID(),
                         submissionId,
                         questionId: question.id,
                         assignedPoint,
-                        status: 'pending',
-                        awardedPoints: 0,
+                        status,
+                        awardedPoints,
                         updatedAt: submittedAt,
                     },
                     { transaction }
                 );
+            }
+
+            // Auto-update team score and submission status for numeric questions
+            if (questions.some(q => q.type === 'numeric' && q.numericConfigJson)) {
+                const results = await SubmissionResult.findAll({
+                    where: { submissionId },
+                    transaction,
+                });
+
+                const totalAwarded = results.reduce((sum, r) => sum + r.awardedPoints, 0);
+                const allAutoGraded = results.every(r => r.status !== 'pending');
+
+                if (totalAwarded !== 0) {
+                    await team.update({ score: team.score + totalAwarded }, { transaction });
+                }
+
+                if (allAutoGraded) {
+                    await Submission.update(
+                        { status: 'graded' },
+                        { where: { id: submissionId }, transaction }
+                    );
+                }
             }
         });
 
@@ -946,6 +1011,7 @@ export class GameManager {
     private mapQuestion(row: Question, status: RoundStatus, role: ClientRole): RoundQuestionView {
         const choices = row.choicesJson ? (JSON.parse(row.choicesJson) as string[]) : undefined;
         const correct = row.correctJson ? JSON.parse(row.correctJson) : null;
+        const numericConfig = row.numericConfigJson ? JSON.parse(row.numericConfigJson) : null;
 
         const shouldReveal = role !== 'team' || status === 'closed';
 
@@ -961,18 +1027,23 @@ export class GameManager {
                 }
             } else if (typeof correct === 'string') {
                 correctAnswerText = correct;
+            } else if (typeof correct === 'number') {
+                correctAnswerText = correct.toString();
             }
         }
+
+        const questionType = row.type === 'mcq' ? 'mcq' : row.type === 'numeric' ? 'numeric' : 'open';
 
         return {
             id: row.id,
             order: row.questionIndex,
-            type: row.type === 'mcq' ? 'mcq' : 'open',
+            type: questionType as 'mcq' | 'open' | 'numeric',
             text: row.text,
             choices,
             explanation: row.explanation ?? null,
             correctChoiceIndices,
             correctAnswerText,
+            numericConfig: numericConfig ?? null,
         };
     }
 
@@ -1057,7 +1128,7 @@ export class GameManager {
             });
             round.questions.forEach((question, qIndex) => {
                 assert(question, 400, `Question ${qIndex + 1} in round ${index + 1} is invalid`);
-                assert(question.type === 'mcq' || question.type === 'open', 400, 'Question type must be mcq or open');
+                assert(question.type === 'mcq' || question.type === 'open' || question.type === 'numeric', 400, 'Question type must be mcq, open, or numeric');
                 assert(typeof question.text === 'string' && question.text.trim().length > 0, 400, 'Question text is required');
                 if (question.type === 'mcq') {
                     assert(Array.isArray(question.choices) && question.choices.length >= 2, 400, 'MCQ questions require at least two choices');
@@ -1066,6 +1137,14 @@ export class GameManager {
                     } else {
                         assert(typeof question.correctChoiceIndex === 'number', 400, 'MCQ question requires correctChoiceIndex or correctChoiceIndices');
                     }
+                } else if (question.type === 'numeric') {
+                    assert(question.numericConfig, 400, 'Numeric questions require numericConfig');
+                    assert(typeof question.numericConfig.correctAnswer === 'number', 400, 'numericConfig.correctAnswer must be a number');
+                    assert(Array.isArray(question.numericConfig.ranges) && question.numericConfig.ranges.length > 0, 400, 'numericConfig.ranges must be a non-empty array');
+                    question.numericConfig.ranges.forEach((range, rIndex) => {
+                        assert(typeof range.maxPercentOff === 'number' && range.maxPercentOff >= 0, 400, `Range ${rIndex + 1}: maxPercentOff must be a non-negative number`);
+                        assert(typeof range.pointsPercent === 'number' && range.pointsPercent >= 0 && range.pointsPercent <= 100, 400, `Range ${rIndex + 1}: pointsPercent must be between 0 and 100`);
+                    });
                 } else {
                     assert(typeof question.answer === 'string' && question.answer.trim().length > 0, 400, 'Open questions require an answer');
                 }
@@ -1082,6 +1161,9 @@ export class GameManager {
                 return JSON.stringify(question.correctChoiceIndices);
             }
             return JSON.stringify([question.correctChoiceIndex ?? 0]);
+        }
+        if (question.type === 'numeric' && question.numericConfig) {
+            return JSON.stringify(question.numericConfig.correctAnswer);
         }
         return question.answer ? JSON.stringify(question.answer) : null;
     }

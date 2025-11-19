@@ -35,10 +35,12 @@ export function initTeamModel(sequelize: Sequelize): typeof Team {
                 type: DataTypes.STRING,
                 allowNull: false,
                 field: 'game_id',
+                unique: false,
             },
             name: {
                 type: DataTypes.STRING,
                 allowNull: false,
+                unique: false,
             },
             joinToken: {
                 type: DataTypes.STRING,
