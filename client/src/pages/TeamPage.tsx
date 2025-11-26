@@ -586,12 +586,29 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
                                 )}
                                 <label className="field">
                                     <span>Your Answer</span>
-                                    <textarea
-                                        required
-                                        value={draft.response}
-                                        onChange={(event) => handleResponseChange(question.id, event.target.value)}
-                                        placeholder="Type your answer"
-                                    />
+                                    {question.type === 'numeric' ? (
+                                        <input
+                                            type="text"
+                                            required
+                                            value={draft.response}
+                                            onChange={(event) => {
+                                                const value = event.target.value;
+                                                // Allow only numbers and optional decimal point
+                                                if (value === '' || /^-?\d*\.?\d*$/.test(value)) {
+                                                    handleResponseChange(question.id, value);
+                                                }
+                                            }}
+                                            placeholder="Enter a number"
+                                            inputMode="decimal"
+                                        />
+                                    ) : (
+                                        <textarea
+                                            required
+                                            value={draft.response}
+                                            onChange={(event) => handleResponseChange(question.id, event.target.value)}
+                                            placeholder="Type your answer"
+                                        />
+                                    )}
                                 </label>
                                 {!round.isFinal && (
                                     <label className="field">

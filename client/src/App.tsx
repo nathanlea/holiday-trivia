@@ -87,11 +87,6 @@ function AppShell(): JSX.Element {
                         {renderConnectionStatus()}
                         {renderTeamNav()}
                         {renderGamemasterNav()}
-                        <nav className="app-nav">
-                            <NavLink to="/" end>
-                                Team
-                            </NavLink>
-                        </nav>
                     </div>
                 </header>
             )}

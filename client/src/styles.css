@@ -1521,6 +1521,41 @@ button:disabled {
     color: #1f2937;
 }
 
+.grade-button--partial {
+    border-color: rgba(59, 130, 246, 0.35);
+    color: #1e40af;
+}
+
+.grade-button--partial:hover,
+.grade-button--partial:focus-visible,
+.grade-button--partial.active {
+    background: rgba(59, 130, 246, 0.2);
+    border-color: rgba(59, 130, 246, 0.5);
+    color: #1e3a8a;
+}
+
+.partial-credit-controls {
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    background: rgba(241, 245, 249, 0.8);
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.partial-credit-label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 0.5rem;
+}
+
+.partial-credit-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
 .submission-answer-choices {
     margin: 0;
     padding-left: 1.1rem;

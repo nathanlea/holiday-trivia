@@ -119,7 +119,7 @@ export async function gradeSubmission(
     gameCode: string,
     pin: string,
     submissionId: string,
-    grades: Array<{ questionId: string; status: SubmissionView['answers'][number]['status'] }>,
+    grades: Array<{ questionId: string; status: SubmissionView['answers'][number]['status']; awardedPoints?: number }>,
 ) {
     return request<void>(`/api/games/${gameCode}/submissions/${submissionId}/grade`, {
         method: 'POST',

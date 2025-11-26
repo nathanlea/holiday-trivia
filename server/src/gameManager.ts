@@ -90,6 +90,7 @@ interface AnswerPayload {
 interface GradePayload {
     questionId: string;
     status: 'pending' | 'correct' | 'incorrect';
+    awardedPoints?: number;
 }
 
 export class GameManager {
@@ -627,7 +628,10 @@ export class GameManager {
                 assert(result, 404, 'Submission result not found');
 
                 let awarded = 0;
-                if (grade.status === 'correct') {
+                if (grade.awardedPoints !== undefined) {
+                    // Use custom awarded points if provided (for partial credit)
+                    awarded = grade.awardedPoints;
+                } else if (grade.status === 'correct') {
                     awarded = result.assignedPoint ?? 0;
                 } else if (grade.status === 'incorrect' && round.isFinal) {
                     awarded = -(result.assignedPoint ?? 0);
