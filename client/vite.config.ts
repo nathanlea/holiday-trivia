@@ -27,9 +27,9 @@ export default defineConfig(({ mode }) => ({
     server: {
         port: 8000,
         host: '0.0.0.0',
-        allowedHosts: ['garminholidaytrivia.org'],
+        allowedHosts: ['holidaytriviaconsole.org'],
         hmr: {
-            host: 'garminholidaytrivia.org',
+            host: 'holidaytriviaconsole.org',
             protocol: 'wss',
         },
         proxy: {

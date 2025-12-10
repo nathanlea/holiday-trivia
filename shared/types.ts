@@ -20,7 +20,18 @@ export interface NumericScoringConfig {
     correctAnswer: number;
     ranges: Array<{
         maxPercentOff: number;
+        /** Points percentage (can exceed 100 for bonus, e.g., 125 for exact answer) */
         pointsPercent: number;
+    }>;
+    /** Optional wager loss thresholds for final round numeric questions.
+     * Defines how much of the wager is lost based on how far off the answer is.
+     * Example: [{ maxPercentOff: 5, wagerLossPercent: 0 }, { maxPercentOff: 10, wagerLossPercent: 50 }, { maxPercentOff: 20, wagerLossPercent: 100 }]
+     * Answers beyond the last threshold lose 100% of wager.
+     */
+    wagerLossThresholds?: Array<{
+        maxPercentOff: number;
+        /** Percentage of wager points to lose (0 = keep all, 100 = lose all) */
+        wagerLossPercent: number;
     }>;
 }
 

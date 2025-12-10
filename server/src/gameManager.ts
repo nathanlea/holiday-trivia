@@ -62,7 +62,14 @@ interface ImportQuestion {
         correctAnswer: number;
         ranges: Array<{
             maxPercentOff: number;
+            /** Points percentage (can exceed 100 for bonus, e.g., 125 for exact answer) */
             pointsPercent: number;
+        }>;
+        /** Optional wager loss thresholds for final round numeric questions */
+        wagerLossThresholds?: Array<{
+            maxPercentOff: number;
+            /** Percentage of wager points to lose (0 = keep all, 100 = lose all) */
+            wagerLossPercent: number;
         }>;
     };
 }
@@ -498,8 +505,8 @@ export class GameManager {
                     if (Number.isFinite(submittedValue) && Number.isFinite(numericConfig.correctAnswer)) {
                         const percentOff = Math.abs((submittedValue - numericConfig.correctAnswer) / numericConfig.correctAnswer) * 100;
 
-                        // Find the applicable scoring range
-                        const sortedRanges = [...numericConfig.ranges].sort((a, b) => a.maxPercentOff - b.maxPercentOff);
+                        // Find the applicable scoring range (pointsPercent can exceed 100 for bonus)
+                        const sortedRanges = [...numericConfig.ranges].sort((a: { maxPercentOff: number; pointsPercent: number }, b: { maxPercentOff: number; pointsPercent: number }) => a.maxPercentOff - b.maxPercentOff);
                         let pointsPercent = 0;
 
                         for (const range of sortedRanges) {
@@ -511,10 +518,28 @@ export class GameManager {
 
                         if (pointsPercent > 0) {
                             status = 'correct';
+                            // pointsPercent can exceed 100 (e.g., 125% for exact answers)
                             awardedPoints = Math.round((assignedPoint * pointsPercent) / 100);
                         } else {
                             status = 'incorrect';
-                            awardedPoints = round.isFinal ? -assignedPoint : 0;
+                            // For final round numeric questions, use wagerLossThresholds if defined
+                            if (round.isFinal && numericConfig.wagerLossThresholds && numericConfig.wagerLossThresholds.length > 0) {
+                                const sortedLossThresholds = [...numericConfig.wagerLossThresholds].sort(
+                                    (a: { maxPercentOff: number; wagerLossPercent: number }, b: { maxPercentOff: number; wagerLossPercent: number }) => a.maxPercentOff - b.maxPercentOff
+                                );
+                                let wagerLossPercent = 100; // Default: lose all if beyond all thresholds
+
+                                for (const threshold of sortedLossThresholds) {
+                                    if (percentOff <= threshold.maxPercentOff) {
+                                        wagerLossPercent = threshold.wagerLossPercent;
+                                        break;
+                                    }
+                                }
+
+                                awardedPoints = -Math.round((assignedPoint * wagerLossPercent) / 100);
+                            } else {
+                                awardedPoints = round.isFinal ? -assignedPoint : 0;
+                            }
                         }
                     }
                 }
@@ -1147,8 +1172,17 @@ export class GameManager {
                     assert(Array.isArray(question.numericConfig.ranges) && question.numericConfig.ranges.length > 0, 400, 'numericConfig.ranges must be a non-empty array');
                     question.numericConfig.ranges.forEach((range, rIndex) => {
                         assert(typeof range.maxPercentOff === 'number' && range.maxPercentOff >= 0, 400, `Range ${rIndex + 1}: maxPercentOff must be a non-negative number`);
-                        assert(typeof range.pointsPercent === 'number' && range.pointsPercent >= 0 && range.pointsPercent <= 100, 400, `Range ${rIndex + 1}: pointsPercent must be between 0 and 100`);
+                        // pointsPercent can exceed 100 (e.g., 125% bonus for exact answers)
+                        assert(typeof range.pointsPercent === 'number' && range.pointsPercent >= 0, 400, `Range ${rIndex + 1}: pointsPercent must be a non-negative number`);
                     });
+                    // Validate wagerLossThresholds if present
+                    if (question.numericConfig.wagerLossThresholds) {
+                        assert(Array.isArray(question.numericConfig.wagerLossThresholds), 400, 'wagerLossThresholds must be an array');
+                        question.numericConfig.wagerLossThresholds.forEach((threshold, tIndex) => {
+                            assert(typeof threshold.maxPercentOff === 'number' && threshold.maxPercentOff >= 0, 400, `Wager loss threshold ${tIndex + 1}: maxPercentOff must be a non-negative number`);
+                            assert(typeof threshold.wagerLossPercent === 'number' && threshold.wagerLossPercent >= 0 && threshold.wagerLossPercent <= 100, 400, `Wager loss threshold ${tIndex + 1}: wagerLossPercent must be between 0 and 100`);
+                        });
+                    }
                 } else {
                     assert(typeof question.answer === 'string' && question.answer.trim().length > 0, 400, 'Open questions require an answer');
                 }
