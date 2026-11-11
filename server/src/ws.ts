@@ -3,7 +3,7 @@ import { Server as HttpServer } from 'http';
 import WebSocket, { WebSocketServer } from 'ws';
 import type { RawData } from 'ws';
 import GameManager, { ConnectedClient } from './gameManager';
-import { WS_PATH } from './config';
+import { isAllowedOrigin, WS_PATH } from './config';
 import { ClientToServerMessage } from '../../shared/types';
 import { HttpError } from './errors';
 
@@ -33,11 +33,28 @@ function parseMessage(data: RawData): ClientToServerMessage | null {
     }
 }
 
-export function setupWebsocket(server: HttpServer, manager: GameManager): void {
-    const wss = new WebSocketServer({ server, path: WS_PATH });
+export function setupWebsocket(server: HttpServer, manager: GameManager): WebSocketServer {
+    const wss = new WebSocketServer({
+        server,
+        path: WS_PATH,
+        maxPayload: 16 * 1024,
+        verifyClient: ({ origin }: { origin: string }) => isAllowedOrigin(origin),
+    });
 
     wss.on('connection', (socket: WebSocket) => {
         let client: ConnectedClient | null = null;
+        let authenticating = false;
+        let alive = true;
+        const authTimeout = setTimeout(() => socket.close(1008, 'Authentication timed out'), 10_000);
+        const heartbeat = setInterval(() => {
+            if (!alive) {
+                socket.terminate();
+                return;
+            }
+            alive = false;
+            socket.ping();
+        }, 30_000);
+        socket.on('pong', () => { alive = true; });
 
         socket.on('message', async (raw: RawData) => {
             const message = parseMessage(raw);
@@ -47,15 +64,30 @@ export function setupWebsocket(server: HttpServer, manager: GameManager): void {
             }
 
             if (message.type === 'hello') {
+                if (client || authenticating) {
+                    socket.close(1008, 'Already authenticated');
+                    return;
+                }
+                authenticating = true;
                 try {
+                    if (!message.payload || typeof message.payload.gameCode !== 'string' ||
+                        !['team', 'gamemaster', 'scoreboard'].includes(message.payload.role)) {
+                        throw new HttpError(400, 'Invalid hello payload');
+                    }
                     client = await manager.registerClient(socket, message.payload.role, message.payload.gameCode, {
                         teamId: message.payload.teamId,
                         teamToken: message.payload.teamToken,
-                        pin: message.payload.pin,
+                        adminSecret: message.payload.adminSecret,
                     });
+                    clearTimeout(authTimeout);
+                    if (socket.readyState !== WebSocket.OPEN) {
+                        manager.unregisterClient(client);
+                        client = null;
+                    }
                 } catch (error) {
                     const err = error as Error;
                     const messageText = err instanceof HttpError ? err.message : 'Unable to authenticate WebSocket connection';
+                    if (!(error instanceof HttpError)) console.error('[ws] authentication failed', error);
                     socket.send(JSON.stringify({ type: 'error', message: messageText }));
                     socket.close(1008, 'Unauthorized');
                 }
@@ -73,6 +105,8 @@ export function setupWebsocket(server: HttpServer, manager: GameManager): void {
         });
 
         socket.on('close', () => {
+            clearTimeout(authTimeout);
+            clearInterval(heartbeat);
             if (client) {
                 manager.unregisterClient(client);
                 client = null;
@@ -87,4 +121,5 @@ export function setupWebsocket(server: HttpServer, manager: GameManager): void {
             }
         });
     });
+    return wss;
 }

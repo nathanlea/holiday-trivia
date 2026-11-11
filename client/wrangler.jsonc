@@ -1,0 +1,20 @@
+{
+    "$schema": "../node_modules/wrangler/config-schema.json",
+    "name": "holiday-trivia",
+    "main": "worker.mjs",
+    "compatibility_date": "2026-11-11",
+    "workers_dev": false,
+    "preview_urls": false,
+    "routes": [
+        { "pattern": "holidaytriviaconsole.org", "custom_domain": true }
+    ],
+    "assets": {
+        "directory": "./dist",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/api", "/api/*", "/ws"]
+    },
+    "vars": {
+        "BACKEND_ORIGIN": "https://api.holidaytriviaconsole.org"
+    }
+}

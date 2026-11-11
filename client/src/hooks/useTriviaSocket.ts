@@ -17,13 +17,12 @@ export type TeamSocketOptions = {
 export type GamemasterSocketOptions = {
     role: 'gamemaster';
     gameCode: string;
-    pin: string;
+    adminSecret: string;
 };
 
 export type ScoreboardSocketOptions = {
     role: 'scoreboard';
     gameCode: string;
-    pin: string;
 };
 
 export type TriviaSocketOptions = TeamSocketOptions | GamemasterSocketOptions | ScoreboardSocketOptions | null;
@@ -58,7 +57,9 @@ export function useTriviaSocket(options: TriviaSocketOptions): TriviaSocketState
         if (options.role === 'team') {
             return `${options.role}:${options.gameCode}:${options.teamId}:${options.teamToken}`;
         }
-        return `${options.role}:${options.gameCode}:${options.pin}`;
+        return options.role === 'gamemaster'
+            ? `${options.role}:${options.gameCode}:${options.adminSecret}`
+            : `${options.role}:${options.gameCode}`;
     }, [options]);
 
     useEffect(() => {
@@ -102,7 +103,6 @@ export function useTriviaSocket(options: TriviaSocketOptions): TriviaSocketState
         const connectionId = connectionCounterRef.current + 1;
         connectionCounterRef.current = connectionId;
         activeConnectionIdRef.current = connectionId;
-        retryAttemptsRef.current = 0;
 
         let shouldRetry = true;
         let intentionalClose = false;
@@ -117,7 +117,7 @@ export function useTriviaSocket(options: TriviaSocketOptions): TriviaSocketState
                 gameCode: currentOptions.gameCode,
                 teamId: 'teamId' in currentOptions ? currentOptions.teamId : undefined,
                 teamToken: 'teamToken' in currentOptions ? currentOptions.teamToken : undefined,
-                pin: 'pin' in currentOptions ? currentOptions.pin : undefined,
+                adminSecret: 'adminSecret' in currentOptions ? currentOptions.adminSecret : undefined,
             };
 
             socket.send(
@@ -132,7 +132,6 @@ export function useTriviaSocket(options: TriviaSocketOptions): TriviaSocketState
             if (!isCurrentConnection()) {
                 return;
             }
-            setConnected(true);
             sendHello();
         };
 
@@ -144,6 +143,9 @@ export function useTriviaSocket(options: TriviaSocketOptions): TriviaSocketState
                 const message = JSON.parse(event.data);
                 switch (message.type) {
                     case 'game_state':
+                        retryAttemptsRef.current = 0;
+                        setConnected(true);
+                        setError(null);
                         setState(message.payload as ServerGameState);
                         break;
                     case 'submission_ack':
@@ -194,7 +196,7 @@ export function useTriviaSocket(options: TriviaSocketOptions): TriviaSocketState
             if (event.code !== 1000 && event.reason && shouldRetry) {
                 setError(event.reason);
             }
-            if (event.code !== 1000 && shouldRetry) {
+            if (shouldRetry) {
                 scheduleReconnect();
             }
         };
@@ -204,19 +206,35 @@ export function useTriviaSocket(options: TriviaSocketOptions): TriviaSocketState
                 return;
             }
             setError('WebSocket connection error');
-            scheduleReconnect();
         };
 
+        const reconnectOnResume = () => {
+            if (document.visibilityState !== 'visible' || !isCurrentConnection() || !shouldRetry ||
+                socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+                return;
+            }
+            if (reconnectTimerRef.current != null) {
+                window.clearTimeout(reconnectTimerRef.current);
+                reconnectTimerRef.current = null;
+            }
+            retryAttemptsRef.current = 0;
+            setRetryToken((token) => token + 1);
+        };
+
+        document.addEventListener('visibilitychange', reconnectOnResume);
+        window.addEventListener('online', reconnectOnResume);
         socket.addEventListener('open', handleOpen);
         socket.addEventListener('message', handleMessage);
-        socket.addEventListener('close', handleClose as unknown as EventListener);
+        socket.addEventListener('close', handleClose);
         socket.addEventListener('error', handleError);
 
         return () => {
             intentionalClose = true;
+            document.removeEventListener('visibilitychange', reconnectOnResume);
+            window.removeEventListener('online', reconnectOnResume);
             socket.removeEventListener('open', handleOpen);
             socket.removeEventListener('message', handleMessage);
-            socket.removeEventListener('close', handleClose as unknown as EventListener);
+            socket.removeEventListener('close', handleClose);
             socket.removeEventListener('error', handleError);
             if (activeConnectionIdRef.current === connectionId) {
                 activeConnectionIdRef.current = null;

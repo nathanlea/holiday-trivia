@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import type { GamemasterGameState, SubmissionView } from '@shared/types';
 import { gradeSubmission } from '../api';
 import { useTriviaSocket } from '../hooks/useTriviaSocket';
+import { loadHostSession } from '../hostSession';
 
 type SubmissionStatus = SubmissionView['answers'][number]['status'];
 type GradeDraft = {
@@ -15,20 +16,20 @@ function GamemasterSubmissionsPage(): JSX.Element {
     const [searchParams] = useSearchParams();
     const navigate = useNavigate();
     const gameCode = searchParams.get('game');
-    const pin = searchParams.get('pin');
+    const [hostSession] = useState(loadHostSession);
+    const pin = hostSession?.gameCode === gameCode ? hostSession.adminSecret : null;
 
     const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
     const [gradeDrafts, setGradeDrafts] = useState<SubmissionDrafts>({});
     const [working, setWorking] = useState(false);
     const [statusMessage, setStatusMessage] = useState<string | null>(null);
-    const [autoSubmittedIds, setAutoSubmittedIds] = useState<Set<string>>(new Set());
 
     const socket = useTriviaSocket(
         gameCode && pin
             ? {
                 role: 'gamemaster',
                 gameCode,
-                pin,
+                adminSecret: pin,
             }
             : null,
     );
@@ -146,9 +147,13 @@ function GamemasterSubmissionsPage(): JSX.Element {
                 }
                 submission.answers.forEach((answer) => {
                     if (!next[submission.id][answer.questionId]) {
+                        const fullPoints = answer.pointValue ?? submission.wagerAmount ?? 0;
+                        const defaultPoints = answer.status === 'correct'
+                            ? fullPoints
+                            : answer.status === 'incorrect' && submission.wagerAmount != null ? -fullPoints : 0;
                         next[submission.id][answer.questionId] = {
                             status: answer.status,
-                            awardedPoints: answer.awardedPoints !== 0 ? answer.awardedPoints : undefined,
+                            awardedPoints: answer.awardedPoints !== defaultPoints ? answer.awardedPoints : undefined,
                         };
                     }
                 });
@@ -177,35 +182,6 @@ function GamemasterSubmissionsPage(): JSX.Element {
             setSelectedTeamId(nextId);
         }
     }, [gmState, teamTiles, selectedTeamId]);
-
-    // Auto-submit when all questions are graded
-    useEffect(() => {
-        if (!gmState || !gameCode || !pin || working) {
-            return;
-        }
-
-        for (const submission of gmState.submissions) {
-            // Skip if already auto-submitted
-            if (autoSubmittedIds.has(submission.id)) {
-                continue;
-            }
-
-            const draft = gradeDrafts[submission.id];
-            if (!draft) continue;
-
-            const allGraded = submission.answers.every((answer) => {
-                const gradeStatus = draft[answer.questionId]?.status ?? answer.status;
-                return gradeStatus === 'correct' || gradeStatus === 'incorrect';
-            });
-
-            // Only auto-submit if all questions are graded
-            if (allGraded) {
-                setAutoSubmittedIds(prev => new Set([...prev, submission.id]));
-                handleSubmitGrades(submission);
-                return; // Submit one at a time
-            }
-        }
-    }, [gradeDrafts, gmState, gameCode, pin, working, autoSubmittedIds]);
 
     const handleGradeChange = (submissionId: string, questionId: string, status: SubmissionStatus, awardedPoints?: number) => {
         setGradeDrafts((current) => {
@@ -274,7 +250,7 @@ function GamemasterSubmissionsPage(): JSX.Element {
         return (
             <div className="page">
                 <h2>Manage Submissions</h2>
-                <p className="error">Missing game code or PIN in URL parameters.</p>
+                <p className="error">Sign in on the gamemaster page in this tab first.</p>
                 <button type="button" onClick={() => navigate('/gamemaster')}>
                     Back to Gamemaster Console
                 </button>
@@ -400,11 +376,14 @@ function GamemasterSubmissionsPage(): JSX.Element {
                                                         {hasChoices && (
                                                             <ul className="submission-answer-choices">
                                                                 {question?.choices?.map((choice, index) => (
-                                                                    <li key={index}>{choice}</li>
+                                                                    <li key={index}>{choice}{question?.correctChoiceIndices?.includes(index) ? ' (correct)' : ''}</li>
                                                                 ))}
                                                             </ul>
                                                         )}
                                                         <p className="submission-answer-text">{answer.response || '—'}</p>
+                                                        {question?.correctAnswerText && !question.numericConfig && (
+                                                            <p className="submission-answer-hint">Correct answer: {question.correctAnswerText}</p>
+                                                        )}
                                                         {question?.numericConfig && (
                                                             <p className="submission-answer-hint">
                                                                 Correct answer: {question.numericConfig.correctAnswer}
@@ -419,7 +398,7 @@ function GamemasterSubmissionsPage(): JSX.Element {
                                                                 >
                                                                     <button
                                                                         type="button"
-                                                                        className={`grade-button grade-button--correct${draftStatus === 'correct' && !gradeDraft?.awardedPoints ? ' active' : ''}`}
+                                                                        className={`grade-button grade-button--correct${draftStatus === 'correct' && gradeDraft?.awardedPoints === undefined ? ' active' : ''}`}
                                                                         onClick={() =>
                                                                             handleGradeChange(
                                                                                 selectedSubmission.id,
@@ -532,10 +511,10 @@ function GamemasterSubmissionsPage(): JSX.Element {
                                             <button
                                                 type="button"
                                                 className="primary"
-                                                disabled={working}
+                                                disabled={working || !socket.connected}
                                                 onClick={() => handleSubmitGrades(selectedSubmission)}
                                             >
-                                                Submit Grades
+                                                {working ? 'Saving...' : 'Save Grades'}
                                             </button>
                                         </div>
                                     </div>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { RoundStateView } from '@shared/types';
-import { joinTeam, submitAnswers, submitWager } from '../api';
+import type { GameSummary, RoundStateView } from '@shared/types';
+import { fetchOpenGame, joinTeam, submitAnswers, submitWager } from '../api';
 import { useTriviaSocket } from '../hooks/useTriviaSocket';
 
 type ConnectionStatus = 'online' | 'offline' | 'error' | null;
@@ -28,7 +28,7 @@ interface TeamPageProps {
     onSessionChange?: (state: TeamTopBarState | null) => void;
 }
 
-const STORAGE_KEY = 'trivia.team.session.v1';
+const STORAGE_KEY = 'trivia.team.session.v2';
 
 function loadSession(): TeamSession | null {
     if (typeof window === 'undefined') {
@@ -59,15 +59,41 @@ function persistSession(session: TeamSession | null): void {
 
 function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps): JSX.Element {
     const [session, setSession] = useState<TeamSession | null>(() => loadSession());
-    const [gameCodeInput, setGameCodeInput] = useState('');
+    const [openGame, setOpenGame] = useState<GameSummary | null>(null);
+    const [openGameError, setOpenGameError] = useState<string | null>(null);
+    const [loadingGame, setLoadingGame] = useState(true);
     const [teamNameInput, setTeamNameInput] = useState('');
     const [joinError, setJoinError] = useState<string | null>(null);
     const [statusMessage, setStatusMessage] = useState<string | null>(null);
     const [answers, setAnswers] = useState<Record<string, AnswerDraft>>({});
+    const [draftRoundId, setDraftRoundId] = useState<string | null>(null);
     const [wagerAmount, setWagerAmount] = useState('');
     const [working, setWorking] = useState(false);
     const [localTimeRemaining, setLocalTimeRemaining] = useState<number | null>(null);
     const statusTimerRef = useRef<number | null>(null);
+
+    useEffect(() => () => onSessionChange?.(null), [onSessionChange]);
+
+    useEffect(() => {
+        if (session) return;
+        let cancelled = false;
+        const refresh = async () => {
+            try {
+                const result = await fetchOpenGame();
+                if (!cancelled) {
+                    setOpenGame(result.game);
+                    setOpenGameError(null);
+                }
+            } catch (error) {
+                if (!cancelled) setOpenGameError(error instanceof Error ? error.message : 'Unable to find game.');
+            } finally {
+                if (!cancelled) setLoadingGame(false);
+            }
+        };
+        void refresh();
+        const timer = window.setInterval(refresh, 10_000);
+        return () => { cancelled = true; window.clearInterval(timer); };
+    }, [session]);
 
     const handleLeave = useCallback(() => {
         setSession(null);
@@ -166,26 +192,49 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
         if (!roundIsOpen) {
             return;
         }
-        const timer = window.setInterval(() => {
-            setLocalTimeRemaining((prev) => {
-                if (prev == null) {
-                    return prev;
-                }
-                return prev > 0 ? prev - 1 : 0;
-            });
-        }, 1000);
-        return () => window.clearInterval(timer);
-    }, [roundIsOpen, currentRound?.id]);
+        const update = () => {
+            if (currentRound?.openedAt && currentRound.timeLimitSeconds !== null && currentRound.timeLimitSeconds > 0) {
+                setLocalTimeRemaining(Math.max(0, Math.ceil(
+                    (Date.parse(currentRound.openedAt) + currentRound.timeLimitSeconds * 1000 - Date.now()) / 1000,
+                )));
+            } else {
+                setLocalTimeRemaining(null);
+            }
+        };
+        update();
+        const timer = window.setInterval(update, 1000);
+        document.addEventListener('visibilitychange', update);
+        return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', update); };
+    }, [roundIsOpen, currentRound?.id, currentRound?.openedAt, currentRound?.timeLimitSeconds]);
 
     useEffect(() => {
         if (!currentRound) {
             setAnswers({});
+            setDraftRoundId(null);
             return;
+        }
+        let saved: Record<string, AnswerDraft> = {};
+        try {
+            const raw = window.sessionStorage.getItem(`trivia.draft.${session?.teamId}.${currentRound.id}`);
+            if (raw) {
+                const parsed: unknown = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    for (const [id, value] of Object.entries(parsed)) {
+                        if (value && typeof value === 'object' && 'response' in value && 'pointValue' in value &&
+                            typeof value.response === 'string' &&
+                            (value.pointValue === null || typeof value.pointValue === 'number')) {
+                            saved[id] = { response: value.response, pointValue: value.pointValue };
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.warn('Unable to restore answer draft', error);
         }
         setAnswers((prev) => {
             const next: Record<string, AnswerDraft> = {};
             currentRound.questions.forEach((question) => {
-                const existing = prev[question.id] ?? { response: '', pointValue: null };
+                const existing = saved[question.id] ?? prev[question.id] ?? { response: '', pointValue: null };
                 // Auto-select point value if there's only 1 question and 1 point option
                 const autoSelectPointValue =
                     !currentRound.isFinal &&
@@ -200,7 +249,17 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
             });
             return next;
         });
+        setDraftRoundId(currentRound.id);
     }, [currentRound?.id]);
+
+    useEffect(() => {
+        if (!session || !draftRoundId || draftRoundId !== currentRound?.id) return;
+        try {
+            window.sessionStorage.setItem(`trivia.draft.${session.teamId}.${draftRoundId}`, JSON.stringify(answers));
+        } catch (error) {
+            console.warn('Unable to save answer draft', error);
+        }
+    }, [answers, draftRoundId, session, currentRound?.id]);
 
     useEffect(() => {
         if (!teamInfo) {
@@ -276,13 +335,15 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
         setJoinError(null);
         setStatusMessage(null);
         try {
-            if (!gameCodeInput.trim() || !teamNameInput.trim()) {
-                throw new Error('Game code and team name are required');
+            if (!teamNameInput.trim()) {
+                throw new Error('Team name is required');
             }
             setWorking(true);
-            const result = await joinTeam(gameCodeInput.trim().toUpperCase(), teamNameInput.trim());
+            const { game } = await fetchOpenGame();
+            if (!game) throw new Error('Joining is closed. Please wait for the host.');
+            const result = await joinTeam(game.code, teamNameInput.trim());
             const nextSession: TeamSession = {
-                gameCode: gameCodeInput.trim().toUpperCase(),
+                gameCode: result.game.code,
                 teamId: result.teamId,
                 teamToken: result.teamToken,
                 teamName: result.name,
@@ -290,7 +351,6 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
             setSession(nextSession);
             persistSession(nextSession);
             setStatusMessage('Joined game successfully.');
-            setGameCodeInput('');
             setTeamNameInput('');
         } catch (error) {
             setJoinError(error instanceof Error ? error.message : 'Unable to join game');
@@ -387,9 +447,9 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
             return;
         }
         try {
-            const amount = Number.parseInt(wagerAmount, 10);
-            if (!Number.isFinite(amount) || amount < 0) {
-                throw new Error('Enter a valid non-negative wager.');
+            const amount = Number(wagerAmount);
+            if (!wagerAmount.trim() || !Number.isInteger(amount) || amount < 0) {
+                throw new Error('Enter a non-negative whole number.');
             }
             if (amount > teamInfo.score) {
                 throw new Error('Wager cannot exceed your current score.');
@@ -457,32 +517,28 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
 
     const renderJoinCard = () => (
         <section className="panel team-card team-card--join">
-            <h3>Join a Game</h3>
+            <span className="stage-badge">Holiday Trivia</span>
+            <h3>{openGame?.title ?? 'Ready to play?'}</h3>
+            <p className="panel-subhead">{loadingGame ? 'Finding your game...' : openGame
+                ? 'One phone per team. Choose a name and join the fun.'
+                : 'The host has not opened joining yet. This page checks automatically.'}</p>
+            {openGameError && <p className="error" role="alert">{openGameError}</p>}
             <form onSubmit={handleJoin} className="join-form">
-                <label className="field">
-                    <span>Game Code</span>
-                    <input
-                        value={gameCodeInput}
-                        onChange={(event) => setGameCodeInput(event.target.value.toUpperCase())}
-                        placeholder="ABCDE"
-                        maxLength={6}
-                        required
-                        autoComplete="off"
-                    />
-                </label>
                 <label className="field">
                     <span>Team Name</span>
                     <input
                         value={teamNameInput}
                         onChange={(event) => setTeamNameInput(event.target.value)}
                         placeholder="Trivia Titans"
+                        minLength={2}
+                        maxLength={40}
                         required
                         autoComplete="off"
                     />
                 </label>
-                {joinError && <p className="error">{joinError}</p>}
-                <button type="submit" className="primary" disabled={working}>
-                    Join Game
+                {joinError && <p className="error" role="alert">{joinError}</p>}
+                <button type="submit" className="primary" disabled={working || !openGame || loadingGame}>
+                    {working ? 'Joining...' : 'Join Game'}
                 </button>
             </form>
         </section>
@@ -604,6 +660,7 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
                                     ) : (
                                         <textarea
                                             required
+                                            maxLength={2000}
                                             value={draft.response}
                                             onChange={(event) => handleResponseChange(question.id, event.target.value)}
                                             placeholder="Type your answer"
@@ -642,8 +699,8 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
                 {statusMessage && <p className="status">{statusMessage}</p>}
                 {socket.error && <p className="error">{socket.error}</p>}
                 <div className="form-actions">
-                    <button type="submit" className="primary" disabled={working}>
-                        Submit Answers
+                    <button type="submit" className="primary" disabled={working || !socket.connected || displayTimeRemaining === 0}>
+                        {working ? 'Sending...' : displayTimeRemaining === 0 ? 'Time is up' : 'Submit Answers'}
                     </button>
                 </div>
             </form>
@@ -673,6 +730,7 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
                     <input
                         type="number"
                         min={0}
+                        step={1}
                         max={teamInfo?.score ?? 0}
                         value={wagerAmount}
                         onChange={(event) => setWagerAmount(event.target.value)}
@@ -680,8 +738,8 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
                     />
                 </label>
                 <div className="form-actions">
-                    <button type="submit" className="primary" disabled={working}>
-                        Submit Wager
+                    <button type="submit" className="primary" disabled={working || !socket.connected || displayTimeRemaining === 0}>
+                        {working ? 'Sending...' : displayTimeRemaining === 0 ? 'Time is up' : 'Submit Wager'}
                     </button>
                 </div>
             </form>
@@ -692,7 +750,10 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
 
     return (
         <div className="page team-page">
-            <h2>Team Console</h2>
+            <h2>{session ? 'Your team' : 'Let the holiday trivia begin'}</h2>
+            {session && !socket.connected && (
+                <p className="info-banner" role="status">{socket.error ?? 'Reconnecting... Your answer drafts stay on this device.'}</p>
+            )}
             {!session && renderJoinCard()}
             {session && (
                 <>

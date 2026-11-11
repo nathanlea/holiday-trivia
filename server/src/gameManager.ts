@@ -1,4 +1,3 @@
-import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import { Op, Transaction, UniqueConstraintError } from 'sequelize';
 import { WebSocket } from 'ws';
@@ -10,11 +9,12 @@ import {
     SubmissionResult,
     Team,
     Wager,
-    sequelize,
+    writeTransaction,
 } from './db';
 import { HttpError, assert } from './errors';
 import { generateGameCode, generateToken, normalizeName, nowUtc } from './utils';
 import { TEAM_TOKEN_BYTES } from './config';
+import { assertAdminSecret } from './auth';
 import {
     ClientRole,
     GameSummary,
@@ -104,9 +104,10 @@ export class GameManager {
     private clientsByGame = new Map<string, Map<string, ConnectedClient>>();
 
     async createGame(title: string, pin: string, code?: string): Promise<GameSummary> {
+        assertAdminSecret(pin);
         const normalizedTitle = title.trim();
-        assert(normalizedTitle.length > 0, 400, 'Title is required');
-        assert(/^[0-9]{6}$/.test(pin), 400, 'PIN must be a 6-digit number');
+        assert(normalizedTitle.length > 0 && normalizedTitle.length <= 120, 400, 'Title must be 1 to 120 characters');
+        assert(!code || /^[A-Z0-9]{3,6}$/i.test(code), 400, 'Game code must be 3 to 6 letters or numbers');
 
         if (code) {
             const existing = await Game.findOne({ where: { code: code.toUpperCase() } });
@@ -120,33 +121,56 @@ export class GameManager {
 
         const id = randomUUID();
         const createdAt = nowUtc();
-        const pinHash = bcrypt.hashSync(pin, 10);
-
-        await Game.create({
-            id,
-            code: gameCode,
-            title: normalizedTitle,
-            pinHash,
-            createdAt,
-            currentRoundId: null,
+        await writeTransaction(async (transaction) => {
+            await Game.update({ joiningOpen: false }, { where: {}, transaction });
+            await Game.create({
+                id,
+                code: gameCode,
+                title: normalizedTitle,
+                joiningOpen: true,
+                createdAt,
+                currentRoundId: null,
+            }, { transaction });
         });
-
+        for (const gameId of this.clientsByGame.keys()) {
+            await this.broadcastGameState(gameId);
+        }
         return {
             id,
             code: gameCode,
             title: normalizedTitle,
             currentRoundId: null,
             createdAt,
+            joiningOpen: true,
         };
+    }
+
+    async getOpenGame(): Promise<GameSummary | null> {
+        const game = await Game.findOne({ where: { joiningOpen: true } });
+        return game ? this.buildGameSummary(game) : null;
+    }
+
+    async setJoiningOpen(gameCode: string, secret: string, open: boolean): Promise<void> {
+        assertAdminSecret(secret);
+        const game = await this.getGameByCode(gameCode);
+        await writeTransaction(async (transaction) => {
+            if (open) {
+                await Game.update({ joiningOpen: false }, { where: {}, transaction });
+            }
+            await game.update({ joiningOpen: open }, { transaction });
+        });
+        for (const id of this.clientsByGame.keys()) {
+            await this.broadcastGameState(id);
+        }
     }
 
     async importGameData(gameCode: string, pin: string, payload: unknown): Promise<void> {
         const game = await this.getGameByCode(gameCode);
-        this.assertPin(game, pin);
+        assertAdminSecret(pin);
 
         const parsed = this.parseImportPayload(payload);
 
-        await sequelize.transaction(async (transaction: Transaction) => {
+        await writeTransaction(async (transaction: Transaction) => {
             await this.clearGameContent(game.id, transaction);
 
             let roundPosition = 0;
@@ -282,21 +306,26 @@ export class GameManager {
 
     async joinTeam(gameCode: string, name: string) {
         const game = await this.getGameByCode(gameCode);
+        assert(game.joiningOpen, 409, 'Joining is closed. Please ask the host to open joining.');
         const normalizedName = normalizeName(name);
-        assert(normalizedName.length >= 2, 400, 'Team name must be at least 2 characters');
+        assert(normalizedName.length >= 2 && normalizedName.length <= 40, 400, 'Team name must be 2 to 40 characters');
 
         const id = randomUUID();
         const joinToken = generateToken(TEAM_TOKEN_BYTES);
         const createdAt = nowUtc();
 
         try {
-            await Team.create({
-                id,
-                gameId: game.id,
-                name: normalizedName,
-                joinToken,
-                score: 0,
-                createdAt,
+            await writeTransaction(async (transaction) => {
+                await game.reload({ transaction });
+                assert(game.joiningOpen, 409, 'Joining is closed. Please ask the host to open joining.');
+                await Team.create({
+                    id,
+                    gameId: game.id,
+                    name: normalizedName,
+                    joinToken,
+                    score: 0,
+                    createdAt,
+                }, { transaction });
             });
         } catch (error) {
             if (error instanceof UniqueConstraintError) {
@@ -318,11 +347,11 @@ export class GameManager {
 
     async removeTeam(gameCode: string, pin: string, teamId: string): Promise<void> {
         const game = await this.getGameByCode(gameCode);
-        this.assertPin(game, pin);
+        assertAdminSecret(pin);
         const team = await this.getTeamById(teamId);
         assert(team.gameId === game.id, 400, 'Team does not belong to this game');
 
-        await sequelize.transaction(async (transaction: Transaction) => {
+        await writeTransaction(async (transaction: Transaction) => {
             const submissions = await Submission.findAll({
                 where: { teamId: team.id },
                 attributes: ['id'],
@@ -350,7 +379,7 @@ export class GameManager {
         _note?: string,
     ): Promise<{ score: number; delta: number; updatedAt: string }> {
         const game = await this.getGameByCode(gameCode);
-        this.assertPin(game, pin);
+        assertAdminSecret(pin);
         assert(Number.isFinite(delta), 400, 'Adjustment amount must be a number');
         const adjustment = Math.trunc(delta);
         assert(adjustment !== 0, 400, 'Adjustment must be non-zero');
@@ -358,8 +387,12 @@ export class GameManager {
         const team = await this.getTeamById(teamId);
         assert(team.gameId === game.id, 400, 'Team does not belong to this game');
 
-        const nextScore = Math.max(team.score + adjustment, 0);
-        await team.update({ score: nextScore });
+        const nextScore = await writeTransaction(async (transaction) => {
+            await team.reload({ transaction });
+            const score = Math.max(team.score + adjustment, 0);
+            await team.update({ score }, { transaction });
+            return score;
+        });
 
         await this.broadcastGameState(game.id);
 
@@ -383,25 +416,37 @@ export class GameManager {
 
         if (round.mode === 'wager') {
             assert(round.status === 'open', 400, 'Wager round must be open to submit a wager');
+            this.assertWithinDeadline(round);
             assert(round.linkedRoundId, 500, 'Wager round is missing a linked final round');
             const linkedRound = await this.getRoundById(round.linkedRoundId);
             assert(linkedRound.gameId === game.id, 400, 'Linked final round does not belong to this game');
             targetRound = linkedRound;
         } else {
-            assert(round.status !== 'open', 400, 'Cannot change wager after the round has started');
             assert(round.isFinal, 400, 'Wagers are only allowed on the final round');
+            const wagerRound = await Round.findOne({ where: { gameId: game.id, mode: 'wager', linkedRoundId: round.id } });
+            assert(wagerRound?.status === 'open', 400, 'Wagers are only accepted while the wager round is open');
+            this.assertWithinDeadline(wagerRound);
         }
-        assert(amount >= 0, 400, 'Wager must be a non-negative number');
+        assert(Number.isInteger(amount) && amount >= 0, 400, 'Wager must be a non-negative whole number');
         assert(amount <= team.score, 400, 'Wager cannot exceed current team score');
 
         const lockedAt = nowUtc();
 
-        const existing = await Wager.findOne({ where: { teamId: team.id, roundId: targetRound.id } });
-        if (existing) {
-            await existing.update({ amount, lockedAt });
-        } else {
-            await Wager.create({ id: randomUUID(), teamId: team.id, roundId: targetRound.id, amount, lockedAt });
-        }
+        await writeTransaction(async (transaction) => {
+            const acceptingRound = round.mode === 'wager' ? round : await Round.findOne({
+                where: { gameId: game.id, mode: 'wager', linkedRoundId: targetRound.id }, transaction,
+            });
+            assert(acceptingRound, 400, 'Wager round not found');
+            await acceptingRound.reload({ transaction });
+            assert(acceptingRound.status === 'open', 409, 'Wager round is closed');
+            this.assertWithinDeadline(acceptingRound);
+            const existing = await Wager.findOne({ where: { teamId: team.id, roundId: targetRound.id }, transaction });
+            if (existing) {
+                await existing.update({ amount, lockedAt }, { transaction });
+            } else {
+                await Wager.create({ id: randomUUID(), teamId: team.id, roundId: targetRound.id, amount, lockedAt }, { transaction });
+            }
+        });
 
         await this.broadcastGameState(game.id);
 
@@ -427,6 +472,7 @@ export class GameManager {
         const round = await this.getRoundById(roundId);
         assert(round.gameId === game.id, 400, 'Round does not belong to this game');
         assert(round.status === 'open', 400, 'Round is not accepting submissions');
+        this.assertWithinDeadline(round);
         assert(round.mode !== 'wager', 400, 'This round only accepts wagers');
 
         const questions = await this.getQuestionsForRound(round.id);
@@ -435,6 +481,9 @@ export class GameManager {
         const pointOptions = JSON.parse(round.pointOptions) as number[];
         const answerMap = new Map<string, AnswerPayload>();
         answers.forEach((answer) => {
+            assert(answer && typeof answer.questionId === 'string' &&
+                typeof answer.response === 'string' && answer.response.trim().length > 0 &&
+                answer.response.length <= 2000, 400, 'Each answer must contain 1 to 2000 characters');
             answerMap.set(answer.questionId, answer);
         });
 
@@ -442,6 +491,9 @@ export class GameManager {
         for (const question of questions) {
             const answer = answerMap.get(question.id);
             assert(answer, 400, 'Answer missing for question');
+            if (question.type === 'numeric') {
+                assert(Number.isFinite(Number(answer.response)), 400, 'Numeric answers must be valid numbers');
+            }
 
             if (round.isFinal) {
                 assignedPoints.push(0);
@@ -463,16 +515,16 @@ export class GameManager {
         const submissionId = randomUUID();
         const submittedAt = nowUtc();
 
-        await sequelize.transaction(async (transaction: Transaction) => {
+        await writeTransaction(async (transaction: Transaction) => {
+            await round.reload({ transaction });
+            assert(round.status === 'open', 409, 'Round is not accepting submissions');
+            this.assertWithinDeadline(round);
             const existing = await Submission.findOne({
                 where: { teamId: team.id, roundId: round.id },
                 transaction,
             });
 
-            if (existing) {
-                await SubmissionResult.destroy({ where: { submissionId: existing.id }, transaction });
-                await existing.destroy({ transaction });
-            }
+            assert(!existing, 409, 'Your answers for this round have already been received');
 
             await Submission.create(
                 {
@@ -500,10 +552,12 @@ export class GameManager {
 
                 if (question.type === 'numeric' && question.numericConfigJson) {
                     const numericConfig = JSON.parse(question.numericConfigJson);
-                    const submittedValue = parseFloat(answer.response);
+                    const submittedValue = Number(answer.response);
 
                     if (Number.isFinite(submittedValue) && Number.isFinite(numericConfig.correctAnswer)) {
-                        const percentOff = Math.abs((submittedValue - numericConfig.correctAnswer) / numericConfig.correctAnswer) * 100;
+                        const percentOff = numericConfig.correctAnswer === 0
+                            ? (submittedValue === 0 ? 0 : Infinity)
+                            : Math.abs((submittedValue - numericConfig.correctAnswer) / numericConfig.correctAnswer) * 100;
 
                         // Find the applicable scoring range (pointsPercent can exceed 100 for bonus)
                         const sortedRanges = [...numericConfig.ranges].sort((a: { maxPercentOff: number; pointsPercent: number }, b: { maxPercentOff: number; pointsPercent: number }) => a.maxPercentOff - b.maxPercentOff);
@@ -592,17 +646,16 @@ export class GameManager {
 
     async openRound(gameCode: string, pin: string, roundId: string): Promise<void> {
         const game = await this.getGameByCode(gameCode);
-        this.assertPin(game, pin);
+        assertAdminSecret(pin);
 
         const round = await this.getRoundById(roundId);
         assert(round.gameId === game.id, 400, 'Round does not belong to this game');
 
-        const openRound = await Round.findOne({ where: { gameId: game.id, status: 'open' } });
-        assert(!openRound || openRound.id === round.id, 400, 'Another round is already open');
-
         const openedAt = nowUtc();
 
-        await sequelize.transaction(async (transaction: Transaction) => {
+        await writeTransaction(async (transaction: Transaction) => {
+            const openRound = await Round.findOne({ where: { gameId: game.id, status: 'open' }, transaction });
+            assert(!openRound || openRound.id === round.id, 400, 'Another round is already open');
             await round.update({ status: 'open', openedAt, closedAt: null }, { transaction });
             await game.update({ currentRoundId: round.id }, { transaction });
         });
@@ -612,14 +665,14 @@ export class GameManager {
 
     async closeRound(gameCode: string, pin: string, roundId: string): Promise<void> {
         const game = await this.getGameByCode(gameCode);
-        this.assertPin(game, pin);
+        assertAdminSecret(pin);
 
         const round = await this.getRoundById(roundId);
         assert(round.gameId === game.id, 400, 'Round does not belong to this game');
 
         const closedAt = nowUtc();
 
-        await sequelize.transaction(async (transaction: Transaction) => {
+        await writeTransaction(async (transaction: Transaction) => {
             await round.update({ status: 'closed', closedAt }, { transaction });
             await game.update({ currentRoundId: null }, { transaction });
         });
@@ -629,7 +682,7 @@ export class GameManager {
 
     async gradeSubmission(gameCode: string, pin: string, submissionId: string, grades: GradePayload[]): Promise<void> {
         const game = await this.getGameByCode(gameCode);
-        this.assertPin(game, pin);
+        assertAdminSecret(pin);
 
         const submission = await Submission.findOne({
             where: { id: submissionId },
@@ -639,23 +692,29 @@ export class GameManager {
         assert(submission, 404, 'Submission not found');
         const round = submission.round!;
 
-        await sequelize.transaction(async (transaction: Transaction) => {
+        await writeTransaction(async (transaction: Transaction) => {
             const team = await Team.findByPk(submission.teamId, { transaction });
             assert(team, 500, 'Team missing for submission');
 
             let scoreDelta = 0;
 
             for (const grade of grades) {
+                assert(grade && ['pending', 'correct', 'incorrect'].includes(grade.status), 400, 'Invalid grade status');
+                assert(grade.awardedPoints === undefined || Number.isFinite(grade.awardedPoints), 400, 'Awarded points must be finite');
                 const result = await SubmissionResult.findOne({
                     where: { submissionId: submission.id, questionId: grade.questionId },
                     transaction,
                 });
                 assert(result, 404, 'Submission result not found');
+                const question = await Question.findByPk(grade.questionId, { transaction });
+                assert(question, 404, 'Question not found');
 
                 let awarded = 0;
                 if (grade.awardedPoints !== undefined) {
                     // Use custom awarded points if provided (for partial credit)
                     awarded = grade.awardedPoints;
+                } else if (question.type === 'numeric' && grade.status === result.status) {
+                    awarded = result.awardedPoints;
                 } else if (grade.status === 'correct') {
                     awarded = result.assignedPoint ?? 0;
                 } else if (grade.status === 'incorrect' && round.isFinal) {
@@ -697,7 +756,7 @@ export class GameManager {
         socket: WebSocket,
         role: ClientRole,
         gameCode: string,
-        options: { teamId?: string; teamToken?: string; pin?: string },
+        options: { teamId?: string; teamToken?: string; adminSecret?: string },
     ): Promise<ConnectedClient> {
         const game = await this.getGameByCode(gameCode);
 
@@ -706,9 +765,10 @@ export class GameManager {
             const team = await this.getTeamById(options.teamId);
             assert(team.gameId === game.id, 401, 'Team does not belong to this game');
             assert(team.joinToken === options.teamToken, 401, 'Invalid team token');
+        } else if (role === 'gamemaster') {
+            assertAdminSecret(options.adminSecret ?? '');
         } else {
-            assert(options.pin, 401, 'PIN is required');
-            this.assertPin(game, options.pin);
+            assert(role === 'scoreboard', 400, 'Invalid client role');
         }
 
         const connected: ConnectedClient = {
@@ -840,6 +900,7 @@ export class GameManager {
             title: game.title,
             currentRoundId: game.currentRoundId,
             createdAt: game.createdAt,
+            joiningOpen: game.joiningOpen,
         };
     }
 
@@ -1013,7 +1074,8 @@ export class GameManager {
                 order: [['questionIndex', 'ASC']],
             });
 
-            const questionViews = questions.map((question) =>
+            const visibleQuestions = role === 'gamemaster' || round.status !== 'pending' ? questions : [];
+            const questionViews = visibleQuestions.map((question) =>
                 this.mapQuestion(question, round.status as RoundStatus, role)
             );
 
@@ -1042,12 +1104,12 @@ export class GameManager {
         const correct = row.correctJson ? JSON.parse(row.correctJson) : null;
         const numericConfig = row.numericConfigJson ? JSON.parse(row.numericConfigJson) : null;
 
-        const shouldReveal = role !== 'team' || status === 'closed';
+        const shouldReveal = role === 'gamemaster' || status === 'closed';
 
         let correctChoiceIndices: number[] | null = null;
         let correctAnswerText: string | null = null;
 
-        if (shouldReveal && correct) {
+        if (shouldReveal && correct !== null) {
             if (row.type === 'mcq') {
                 if (Array.isArray(correct)) {
                     correctChoiceIndices = correct as number[];
@@ -1069,10 +1131,10 @@ export class GameManager {
             type: questionType as 'mcq' | 'open' | 'numeric',
             text: row.text,
             choices,
-            explanation: row.explanation ?? null,
+            explanation: shouldReveal ? row.explanation ?? null : null,
             correctChoiceIndices,
             correctAnswerText,
-            numericConfig: numericConfig ?? null,
+            numericConfig: shouldReveal ? numericConfig ?? null : null,
         };
     }
 
@@ -1082,7 +1144,14 @@ export class GameManager {
         }
         const opened = Date.parse(round.openedAt);
         const end = opened + round.timeLimitSeconds * 1000;
-        return Math.max(0, Math.floor((end - Date.now()) / 1000));
+        return Math.max(0, Math.ceil((end - Date.now()) / 1000));
+    }
+
+    private assertWithinDeadline(round: Round): void {
+        if (round.openedAt && round.timeLimitSeconds !== null && round.timeLimitSeconds > 0) {
+            assert(Date.now() < Date.parse(round.openedAt) + round.timeLimitSeconds * 1000,
+                409, 'Time is up for this round');
+        }
     }
 
     private async getScoreboardForGame(gameId: string): Promise<TeamScore[]> {
@@ -1120,11 +1189,6 @@ export class GameManager {
         const team = await Team.findByPk(id);
         assert(team, 404, 'Team not found');
         return team!;
-    }
-
-    private assertPin(game: Game, pin: string): void {
-        const matches = bcrypt.compareSync(pin, game.pinHash);
-        assert(matches, 401, 'Invalid PIN');
     }
 
     private parseImportPayload(payload: unknown): ImportPayload {

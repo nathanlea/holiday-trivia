@@ -11,7 +11,7 @@ function ScoreboardTable({ scores, highlightTeamId }: ScoreboardTableProps): JSX
     }
 
     return (
-        <table className="scoreboard-table">
+        <table className="scoreboard-table" aria-label="Team rankings">
             <thead>
                 <tr>
                     <th>Rank</th>
@@ -20,11 +20,11 @@ function ScoreboardTable({ scores, highlightTeamId }: ScoreboardTableProps): JSX
                 </tr>
             </thead>
             <tbody>
-                {scores.map((score, index) => {
+                {scores.map((score) => {
                     const isHighlight = highlightTeamId === score.teamId;
                     return (
                         <tr key={score.teamId} className={isHighlight ? 'highlight' : undefined}>
-                            <td>{index + 1}</td>
+                            <td>{scores.findIndex((entry) => entry.score === score.score) + 1}</td>
                             <td>{score.name}</td>
                             <td>{score.score}</td>
                         </tr>

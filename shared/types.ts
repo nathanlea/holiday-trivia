@@ -14,6 +14,7 @@ export interface GameSummary {
     title: string;
     currentRoundId: string | null;
     createdAt: string;
+    joiningOpen: boolean;
 }
 
 export interface NumericScoringConfig {
@@ -136,7 +137,7 @@ export interface HelloPayload {
     gameCode: string;
     teamId?: string;
     teamToken?: string;
-    pin?: string;
+    adminSecret?: string;
 }
 
 export interface ClientHelloMessage {

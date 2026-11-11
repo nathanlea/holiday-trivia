@@ -1,5 +1,15 @@
 Trivia game system - requirements
 
+2026 update
+The current deployment and event workflow are documented in [README.md](./README.md).
+These replace the original local-only hosting and PIN requirements below:
+- Cloudflare Worker frontend with same-origin API/WebSocket proxy.
+- One Docker-hosted backend on a DigitalOcean droplet with persistent SQLite.
+- One server-configured host secret for all management; no per-game PIN.
+- Public read-only scoreboard; teams join the one open game using only a team name.
+- Server-enforced deadlines and one accepted answer submission per team per round.
+The remaining MVP notes below are historical context where they conflict with these updates.
+
 Purpose
 This document defines the functional and non-functional requirements for a small, locally-hosted, real-time trivia game intended for live audiences. It is focused on an MVP that supports teams joining without passwords, a gamemaster control panel, and a simple real-time scoreboard.
 

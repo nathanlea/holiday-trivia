@@ -363,6 +363,7 @@ textarea {
 }
 
 .field {
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 0.45rem;
@@ -387,6 +388,9 @@ textarea {
 input,
 select,
 textarea {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
     border: 1px solid rgba(148, 163, 184, 0.35);
     border-radius: 14px;
     padding: 0.65rem 0.85rem;
@@ -457,10 +461,14 @@ button:disabled {
 
 .question-list {
     display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
     gap: 1.15rem;
 }
 
 .question-card {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
     border-radius: 18px;
     padding: 1.25rem;
     border: 1px solid rgba(148, 163, 184, 0.18);
@@ -2182,5 +2190,130 @@ button:disabled {
     .submission-summary-time,
     .submission-summary-status {
         justify-self: start;
+    }
+}
+
+.app-footer {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    padding: 1.25rem;
+    color: #475569;
+    background: var(--holiday-cream);
+}
+
+.app-footer a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+}
+
+:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+    outline: 3px solid #047857;
+    outline-offset: 3px;
+}
+
+button,
+.primary,
+input,
+select {
+    min-height: 44px;
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.event-controls {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    border-left: 5px solid var(--holiday-green);
+}
+
+.event-controls > div {
+    flex: 1 1 260px;
+}
+
+.team-card--join {
+    width: 100%;
+    max-width: 560px;
+    align-self: center;
+}
+
+.scoreboard-table td:nth-child(2) {
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+    .app-header {
+        position: static;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.75rem;
+        padding: 1rem;
+    }
+
+    .app-header-controls,
+    .header-team-controls,
+    .panel-header,
+    .panel-actions,
+    .team-card-header,
+    .page-header {
+        flex-wrap: wrap;
+        min-width: 0;
+    }
+
+    .app-main {
+        padding: 1.25rem 0.75rem 2rem;
+    }
+
+    .grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .panel {
+        min-width: 0;
+        padding: 1.1rem;
+        border-radius: 14px;
+    }
+
+    .page h2 {
+        font-size: 1.65rem;
+    }
+
+    .team-chip {
+        overflow-wrap: anywhere;
+        min-width: 0;
+    }
+
+    .form-actions,
+    .form-actions .primary {
+        width: 100%;
+    }
+
+    .scoreboard-display {
+        padding: 1rem 0.5rem;
+    }
+
+    .scoreboard-display .scoreboard-table th,
+    .scoreboard-display .scoreboard-table td {
+        padding: 0.65rem 0.4rem;
+        font-size: clamp(1rem, 4vw, 1.5rem);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
     }
 }

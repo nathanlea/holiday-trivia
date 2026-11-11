@@ -1,0 +1,44 @@
+services:
+  server:
+    build: .
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      TRIVIA_ADMIN_SECRET: ${TRIVIA_ADMIN_SECRET:?Set TRIVIA_ADMIN_SECRET in .env}
+      TRIVIA_ALLOWED_ORIGINS: https://holidaytriviaconsole.org
+      TRIVIA_DB_FILE: /app/data/trivia.db
+    volumes:
+      - trivia-data:/app/data
+    expose:
+      - "3000"
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      server:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  trivia-data:
+  caddy-data:
+  caddy-config:

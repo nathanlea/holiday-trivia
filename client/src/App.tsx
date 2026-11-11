@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import TeamPage from './pages/TeamPage';
 import GamemasterPage from './pages/GamemasterPage';
 import GamemasterSubmissionsPage from './pages/GamemasterSubmissionsPage';
@@ -26,19 +26,16 @@ function AppShell(): JSX.Element {
     const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(null);
     const [teamNavState, setTeamNavState] = useState<TeamNavState | null>(null);
     const [gamemasterNavState, setGamemasterNavState] = useState<GamemasterNavState | null>(null);
-    const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
-    const scoreboardDisplayMode =
-        location.pathname === '/scoreboard' && searchParams.has('game') && searchParams.has('pin');
+    const scoreboardDisplayMode = location.pathname === '/scoreboard';
     const shellClassName = scoreboardDisplayMode ? 'app-shell scoreboard-display-mode' : 'app-shell';
-    const isGamemasterPage = location.pathname === '/gamemaster';
     const headerTitle = gamemasterNavState?.gameTitle ?? teamNavState?.gameTitle ?? 'Trivia Control Center';
 
     useEffect(() => {
-        const nextTitle = teamNavState?.gameTitle ?? 'Trivia Control';
+        const nextTitle = gamemasterNavState?.gameTitle ?? teamNavState?.gameTitle ?? 'Holiday Trivia';
         if (typeof document !== 'undefined' && document.title !== nextTitle) {
             document.title = nextTitle;
         }
-    }, [teamNavState?.gameTitle]);
+    }, [teamNavState?.gameTitle, gamemasterNavState?.gameTitle]);
 
     const renderConnectionStatus = () => {
         if (!connectionStatus) {
@@ -90,7 +87,7 @@ function AppShell(): JSX.Element {
                     </div>
                 </header>
             )}
-            <main className="app-main">
+            <main className="app-main" id="main-content">
                 <Routes>
                     <Route
                         path="/"
@@ -120,8 +117,16 @@ function AppShell(): JSX.Element {
                     <Route path="/gamemaster/teams" element={<GamemasterTeamsPage />} />
                     <Route path="/scoreboard" element={<ScoreboardPage />} />
                     <Route path="/welcome" element={<LandingPage />} />
+                    <Route path="*" element={<section className="panel page"><h2>Page not found</h2><Link to="/">Back to trivia</Link></section>} />
                 </Routes>
             </main>
+            {!scoreboardDisplayMode && (
+                <footer className="app-footer">
+                    <Link to="/">Play</Link>
+                    <Link to="/scoreboard">Scoreboard</Link>
+                    <Link to="/gamemaster">Host tools</Link>
+                </footer>
+            )}
         </div>
     );
 }

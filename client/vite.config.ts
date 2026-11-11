@@ -2,24 +2,21 @@ import path from 'path';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig({
     plugins: [react()],
     resolve: {
         alias: {
-            '@': path.resolve(__dirname, 'src'),
-            '@shared': path.resolve(__dirname, '../shared'),
+            '@': path.resolve(import.meta.dirname, 'src'),
+            '@shared': path.resolve(import.meta.dirname, '../shared'),
         },
     },
     build: {
         outDir: 'dist',
         sourcemap: false,
-        // Minify for production
-        minify: 'esbuild',
-        // Chunk splitting for better caching
-        rollupOptions: {
+        rolldownOptions: {
             output: {
-                manualChunks: {
-                    vendor: ['react', 'react-dom', 'react-router-dom'],
+                manualChunks(id) {
+                    if (id.includes('/node_modules/')) return 'vendor';
                 },
             },
         },
@@ -27,11 +24,6 @@ export default defineConfig(({ mode }) => ({
     server: {
         port: 8000,
         host: '0.0.0.0',
-        allowedHosts: ['holidaytriviaconsole.org'],
-        hmr: {
-            host: 'holidaytriviaconsole.org',
-            protocol: 'wss',
-        },
         proxy: {
             '/api': {
                 target: 'http://localhost:3000',
@@ -48,19 +40,18 @@ export default defineConfig(({ mode }) => ({
             strict: true,
             // Only allow access to client src, shared types, and node_modules
             allow: [
-                path.resolve(__dirname, 'src'),
-                path.resolve(__dirname, 'node_modules'),
-                path.resolve(__dirname, '../shared'),
-                path.resolve(__dirname, 'index.html'),
+                path.resolve(import.meta.dirname, 'src'),
+                path.resolve(import.meta.dirname, 'node_modules'),
+                path.resolve(import.meta.dirname, '../shared'),
+                path.resolve(import.meta.dirname, 'index.html'),
             ],
             // Explicitly deny access to sensitive directories
             deny: [
-                path.resolve(__dirname, '../server'),
-                path.resolve(__dirname, '../data'),
-                path.resolve(__dirname, '../scripts'),
-                path.resolve(__dirname, '../.env'),
+                path.resolve(import.meta.dirname, '../server'),
+                path.resolve(import.meta.dirname, '../data'),
+                path.resolve(import.meta.dirname, '../scripts'),
+                path.resolve(import.meta.dirname, '../.env'),
                 '**/.git/**',
-                '**/node_modules/.vite/**',
             ],
         },
     },
@@ -69,4 +60,4 @@ export default defineConfig(({ mode }) => ({
         port: 8000,
         host: '0.0.0.0',
     },
-}));
+});

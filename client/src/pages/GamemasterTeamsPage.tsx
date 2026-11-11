@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import type { GamemasterGameState } from '@shared/types';
 import { adjustTeamScore, removeTeam } from '../api';
 import { useTriviaSocket } from '../hooks/useTriviaSocket';
+import { loadHostSession } from '../hostSession';
 
 interface TeamAdjustmentDraft {
     amount: string;
@@ -13,7 +14,8 @@ function GamemasterTeamsPage(): JSX.Element {
     const [searchParams] = useSearchParams();
     const navigate = useNavigate();
     const gameCode = searchParams.get('game');
-    const pin = searchParams.get('pin');
+    const [hostSession] = useState(loadHostSession);
+    const pin = hostSession?.gameCode === gameCode ? hostSession.adminSecret : null;
 
     const [teamAdjustmentDrafts, setTeamAdjustmentDrafts] = useState<Record<string, TeamAdjustmentDraft>>({});
     const [pendingTeamAction, setPendingTeamAction] = useState<string | null>(null);
@@ -24,7 +26,7 @@ function GamemasterTeamsPage(): JSX.Element {
             ? {
                 role: 'gamemaster',
                 gameCode,
-                pin,
+                adminSecret: pin,
             }
             : null,
     );
@@ -75,7 +77,7 @@ function GamemasterTeamsPage(): JSX.Element {
 
     const handleApplyAdjustment = async (teamId: string, teamName: string) => {
         if (!gameCode || !pin) {
-            setStatusMessage('Missing game code or PIN.');
+            setStatusMessage('Sign in on the gamemaster page first.');
             return;
         }
         const draft = getTeamAdjustmentDraft(teamId);
@@ -105,7 +107,7 @@ function GamemasterTeamsPage(): JSX.Element {
 
     const handleRemoveTeam = async (teamId: string, teamName: string) => {
         if (!gameCode || !pin) {
-            setStatusMessage('Missing game code or PIN.');
+            setStatusMessage('Sign in on the gamemaster page first.');
             return;
         }
         const confirmed = window.confirm(`Remove ${teamName} from the game? Their submissions and wagers will be deleted.`);
@@ -133,7 +135,7 @@ function GamemasterTeamsPage(): JSX.Element {
         return (
             <div className="page">
                 <h2>Manage Teams</h2>
-                <p className="error">Missing game code or PIN in URL parameters.</p>
+                <p className="error">Sign in on the gamemaster page in this tab first.</p>
                 <button type="button" onClick={() => navigate('/gamemaster')}>
                     Back to Gamemaster Console
                 </button>

@@ -7,7 +7,7 @@ function LandingPage(): JSX.Element {
                 <h2>Welcome to Trivia Control Center</h2>
                 <p>
                     Pick the perspective that matches your role and follow the prompts to join the live trivia game. All
-                    experiences stay in sync through the realtime server running on your local network.
+                    experiences stay in sync live, wherever you join.
                 </p>
             </section>
 
@@ -23,7 +23,7 @@ function LandingPage(): JSX.Element {
                 <article className="role-card">
                     <h3>Gamemaster</h3>
                     <p>
-                        Create games, import question sets, manage rounds, and grade submissions. Requires the six-digit game PIN to
+                        Create games, import question sets, manage rounds, and grade submissions. Use your host secret to
                         unlock controls.
                     </p>
                     <Link className="primary" to="/gamemaster">
@@ -34,8 +34,8 @@ function LandingPage(): JSX.Element {
                 <article className="role-card">
                     <h3>Scoreboard</h3>
                     <p>
-                        Display a projection-friendly scoreboard that updates instantly as the gamemaster awards points. Protect it
-                        with the gamemaster PIN.
+                        Display a projection-friendly scoreboard that updates instantly as the gamemaster awards points.
+                        No PIN or sign-in required.
                     </p>
                     <Link className="primary" to="/scoreboard">
                         Launch Scoreboard

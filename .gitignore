@@ -6,4 +6,8 @@ dist/
 server/dist/
 client/dist/
 data/
-package-lock.json
+.wrangler/
+.dev.vars
+.env.*
+!.env.example
+*.tsbuildinfo

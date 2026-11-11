@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { GamemasterGameState, RoundStateView, SubmissionView } from '@shared/types';
 import ScoreboardTable from '../components/ScoreboardTable';
-import { adjustTeamScore, closeRound, createGame, gradeSubmission, importQuestionSet, openRound, removeTeam } from '../api';
+import { adjustTeamScore, closeRound, createGame, fetchOpenGame, gradeSubmission, importQuestionSet, openRound, removeTeam, setJoiningOpen } from '../api';
 import { useTriviaSocket } from '../hooks/useTriviaSocket';
+import { loadHostSession, persistHostSession, type HostSession } from '../hostSession';
 
-interface GamemasterSession {
-    gameCode: string;
-    pin: string;
-}
+type GamemasterSession = HostSession;
 
 type SubmissionStatus = SubmissionView['answers'][number]['status'];
 
@@ -23,34 +21,8 @@ interface GamemasterPageProps {
     onSessionChange?: (state: { gameCode: string; gameTitle: string | null; onSignOut: () => void } | null) => void;
 }
 
-const STORAGE_KEY = 'trivia.gamemaster.session.v1';
-
-function loadSession(): GamemasterSession | null {
-    if (typeof window === 'undefined') {
-        return null;
-    }
-    try {
-        const raw = window.localStorage.getItem(STORAGE_KEY);
-        if (!raw) {
-            return null;
-        }
-        return JSON.parse(raw) as GamemasterSession;
-    } catch (error) {
-        console.warn('Unable to parse gamemaster session', error);
-        return null;
-    }
-}
-
-function persistSession(session: GamemasterSession | null): void {
-    if (typeof window === 'undefined') {
-        return;
-    }
-    if (!session) {
-        window.localStorage.removeItem(STORAGE_KEY);
-        return;
-    }
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-}
+const loadSession = loadHostSession;
+const persistSession = persistHostSession;
 
 function GamemasterPage({ onConnectionStatusChange, onSessionChange }: GamemasterPageProps): JSX.Element {
     const [session, setSession] = useState<GamemasterSession | null>(() => loadSession());
@@ -62,9 +34,9 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
     const [toastMessage, setToastMessage] = useState<string | null>(null);
     const [working, setWorking] = useState(false);
     const [creating, setCreating] = useState(false);
+    const [importing, setImporting] = useState(false);
     const [gradeDrafts, setGradeDrafts] = useState<SubmissionDrafts>({});
     const [createTitle, setCreateTitle] = useState('');
-    const [createPin, setCreatePin] = useState('');
     const [createCode, setCreateCode] = useState('');
     const [importFile, setImportFile] = useState<File | null>(null);
     const [submissionsFullScreen, setSubmissionsFullScreen] = useState(false);
@@ -73,12 +45,17 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
     const [teamAdjustmentDrafts, setTeamAdjustmentDrafts] = useState<Record<string, TeamAdjustmentDraft>>({});
     const [pendingTeamAction, setPendingTeamAction] = useState<string | null>(null);
 
+    useEffect(() => () => {
+        onSessionChange?.(null);
+        onConnectionStatusChange?.(null);
+    }, [onSessionChange, onConnectionStatusChange]);
+
     const socket = useTriviaSocket(
         session
             ? {
                 role: 'gamemaster',
                 gameCode: session.gameCode,
-                pin: session.pin,
+                adminSecret: session.adminSecret,
             }
             : null,
     );
@@ -192,7 +169,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
         });
 
         return tiles;
-    }, [gmState, submissionsByTeam, submissionsForActiveRound, gradeDrafts]);
+    }, [gmState, submissionsByTeam, submissionsForActiveRound, gradeDrafts, activeRound, activeRoundId]);
 
     const hasSubmissions = submissionsForActiveRound.length > 0;
 
@@ -391,17 +368,30 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
         });
     }, [gmState]);
 
-    const handleJoin = (event: React.FormEvent) => {
+    const handleJoin = async (event: React.FormEvent) => {
         event.preventDefault();
         setJoinError(null);
         setStatusMessage(null);
-        if (!gameCodeInput.trim() || !pinInput.trim()) {
-            setJoinError('Game code and PIN are required.');
+        if (!pinInput.trim()) {
+            setJoinError('Host secret is required.');
+            return;
+        }
+        let code = gameCodeInput.trim().toUpperCase();
+        if (!code) {
+            try {
+                code = (await fetchOpenGame()).game?.code ?? '';
+            } catch (error) {
+                setJoinError(error instanceof Error ? error.message : 'Unable to find open game.');
+                return;
+            }
+        }
+        if (!code) {
+            setJoinError('No game is open. Enter an existing game code or create a game.');
             return;
         }
         const next: GamemasterSession = {
-            gameCode: gameCodeInput.trim().toUpperCase(),
-            pin: pinInput.trim(),
+            gameCode: code,
+            adminSecret: pinInput.trim(),
         };
         setSession(next);
         persistSession(next);
@@ -415,18 +405,14 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
         setCreateError(null);
         setStatusMessage(null);
         const trimmedTitle = createTitle.trim();
-        const trimmedPin = createPin.trim();
+        const trimmedPin = pinInput.trim();
         const trimmedCode = createCode.trim().toUpperCase();
         const selectedFile = importFile;
         const selectedFileName = selectedFile?.name ?? '';
         let importPayload: unknown | null = null;
 
         if (!trimmedTitle || !trimmedPin) {
-            setCreateError('Title and PIN are required.');
-            return;
-        }
-        if (!/^[0-9]{6}$/.test(trimmedPin)) {
-            setCreateError('PIN must be exactly 6 digits.');
+            setCreateError('Title and host secret are required.');
             return;
         }
 
@@ -444,17 +430,16 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
             setCreating(true);
             const result = await createGame({
                 title: trimmedTitle,
-                pin: trimmedPin,
+                adminSecret: trimmedPin,
                 code: trimmedCode ? trimmedCode : undefined,
             });
             const next: GamemasterSession = {
                 gameCode: result.game.code,
-                pin: trimmedPin,
+                adminSecret: trimmedPin,
             };
             setSession(next);
             persistSession(next);
             setCreateTitle('');
-            setCreatePin('');
             setCreateCode('');
             let status = `Created game "${result.game.title}" with code ${result.game.code}.`;
             if (importPayload) {
@@ -484,16 +469,37 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
         try {
             setWorking(true);
             if (action === 'open') {
-                await openRound(session.gameCode, session.pin, round.id);
+                await openRound(session.gameCode, session.adminSecret, round.id);
                 setStatusMessage(`Round "${round.label}" opened.`);
             } else {
-                await closeRound(session.gameCode, session.pin, round.id);
+                await closeRound(session.gameCode, session.adminSecret, round.id);
                 setStatusMessage(`Round "${round.label}" closed.`);
             }
         } catch (error) {
             setStatusMessage(error instanceof Error ? error.message : 'Unable to update round.');
         } finally {
             setWorking(false);
+        }
+    };
+
+    const handleImport = async (event: React.FormEvent) => {
+        event.preventDefault();
+        if (!session || !importFile) return;
+        if (gmState?.rounds.length && !window.confirm('Replace all questions and reset scores, answers, and wagers for this game?')) return;
+        setWorking(true);
+        setImporting(true);
+        setCreateError(null);
+        try {
+            const payload: unknown = JSON.parse(await importFile.text());
+            await importQuestionSet(session.gameCode, session.adminSecret, payload);
+            setGradeDrafts({});
+            setImportFile(null);
+            setStatusMessage('Question set imported. Ready to open the first round.');
+        } catch (error) {
+            setCreateError(error instanceof Error ? error.message : 'Unable to import question set.');
+        } finally {
+            setWorking(false);
+            setImporting(false);
         }
     };
 
@@ -519,7 +525,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
 
         try {
             setWorking(true);
-            await gradeSubmission(session.gameCode, session.pin, submission.id, submission.answers.map((answer) => ({
+            await gradeSubmission(session.gameCode, session.adminSecret, submission.id, submission.answers.map((answer) => ({
                 questionId: answer.questionId,
                 status: draft[answer.questionId] ?? answer.status,
             })));
@@ -548,7 +554,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
 
     const handleApplyAdjustment = async (teamId: string, teamName: string) => {
         if (!session) {
-            setStatusMessage('Connect with a game code and PIN to manage teams.');
+            setStatusMessage('Connect with your host secret to manage teams.');
             return;
         }
         const draft = getTeamAdjustmentDraft(teamId);
@@ -560,7 +566,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
         const actionKey = `${teamId}:adjust`;
         setPendingTeamAction(actionKey);
         try {
-            const result = await adjustTeamScore(session.gameCode, session.pin, teamId, parsed, draft.note.trim() ? draft.note.trim() : undefined);
+            const result = await adjustTeamScore(session.gameCode, session.adminSecret, teamId, parsed, draft.note.trim() ? draft.note.trim() : undefined);
             const verb = result.delta > 0 ? 'Added' : 'Removed';
             const absolute = Math.abs(result.delta);
             setStatusMessage(`${verb} ${absolute} point${absolute === 1 ? '' : 's'} for ${teamName}.`);
@@ -578,7 +584,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
 
     const handleRemoveTeam = async (teamId: string, teamName: string) => {
         if (!session) {
-            setStatusMessage('Connect with a game code and PIN to manage teams.');
+            setStatusMessage('Connect with your host secret to manage teams.');
             return;
         }
         const confirmed = window.confirm(`Remove ${teamName} from the game? Their submissions and wagers will be deleted.`);
@@ -588,7 +594,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
         const actionKey = `${teamId}:remove`;
         setPendingTeamAction(actionKey);
         try {
-            await removeTeam(session.gameCode, session.pin, teamId);
+            await removeTeam(session.gameCode, session.adminSecret, teamId);
             setStatusMessage(`Removed ${teamName} from the game.`);
             setTeamAdjustmentDrafts((current) => {
                 const next = { ...current };
@@ -614,7 +620,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
 
     const currentRound = gmState?.rounds.find((round) => round.id === gmState.game.currentRoundId) ?? null;
     const scoreboardDisplayUrl = session
-        ? `/scoreboard?game=${encodeURIComponent(session.gameCode)}&pin=${encodeURIComponent(session.pin)}`
+        ? `/scoreboard?game=${encodeURIComponent(session.gameCode)}`
         : '/scoreboard';
     const handleExitFullScreen = () => {
         setSubmissionsFullScreen(false);
@@ -624,7 +630,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
     return (
         <div className="page gamemaster-page">
             {toastMessage && (
-                <div className="toast-notification">
+                <div className="toast-notification" role="status">
                     {toastMessage}
                 </div>
             )}
@@ -636,6 +642,58 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
                 />
             )}
             <h2>Gamemaster Console</h2>
+            {!session && (
+                <section className="panel">
+                    <label className="field">
+                        <span>Host secret</span>
+                        <input type="password" value={pinInput} onChange={(event) => setPinInput(event.target.value)}
+                            autoComplete="current-password" placeholder="The secret configured on your server" />
+                    </label>
+                    <p className="panel-subhead">One secret for all host tools. Players never need it.</p>
+                </section>
+            )}
+            {session && socket.error && (
+                <section className="panel" role="alert">
+                    <p className="error">{socket.error}</p>
+                    <button type="button" onClick={clearSession}>Sign out and reconnect</button>
+                </section>
+            )}
+            {gmState && session && (
+                <section className="panel event-controls">
+                    <div>
+                        <h3>{gmState.game.joiningOpen ? 'Team joining is open' : 'Team joining is closed'}</h3>
+                        <p className="panel-subhead">Teams visit {window.location.origin} and enter a team name.</p>
+                        <p>{scoreboardCount} team{scoreboardCount === 1 ? '' : 's'} joined</p>
+                    </div>
+                    <button type="button" disabled={working || !socket.connected} onClick={async () => {
+                        setWorking(true);
+                        try {
+                            await setJoiningOpen(session.gameCode, session.adminSecret, !gmState.game.joiningOpen);
+                        } catch (error) {
+                            setStatusMessage(error instanceof Error ? error.message : 'Unable to update joining.');
+                        } finally {
+                            setWorking(false);
+                        }
+                    }}>{gmState.game.joiningOpen ? 'Close joining' : 'Open joining'}</button>
+                    <a className="ghost-link" href={scoreboardDisplayUrl} target="_blank" rel="noreferrer">Open projector scoreboard</a>
+                </section>
+            )}
+            {session && (
+                <section className="panel">
+                    <h3>{gmState?.rounds.length ? 'Replace question set' : 'Import your questions'}</h3>
+                    <form className="join-form" onSubmit={handleImport}>
+                        <label className="field">
+                            <span>Question set (JSON)</span>
+                            <input type="file" accept=".json,application/json" required
+                                onChange={(event) => setImportFile(event.target.files?.[0] ?? null)} />
+                        </label>
+                        {createError && <p className="error" role="alert">{createError}</p>}
+                        <button type="submit" disabled={working || !importFile || !socket.connected}>
+                            {importing ? 'Importing...' : 'Import Questions'}
+                        </button>
+                    </form>
+                </section>
+            )}
             <div className="grid">
                 {!session && (
                     <>
@@ -648,18 +706,8 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
                                         value={createTitle}
                                         onChange={(event) => setCreateTitle(event.target.value)}
                                         placeholder="Trivia Night"
+                                        maxLength={120}
                                         required
-                                    />
-                                </label>
-                                <label className="field">
-                                    <span>PIN (6 digits)</span>
-                                    <input
-                                        value={createPin}
-                                        onChange={(event) => setCreatePin(event.target.value.replace(/[^0-9]/g, ''))}
-                                        placeholder="123456"
-                                        maxLength={6}
-                                        required
-                                        inputMode="numeric"
                                     />
                                 </label>
                                 <label className="field">
@@ -700,26 +748,15 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
                         </section>
 
                         <section className="panel">
-                            <h3>Authenticate</h3>
+                            <h3>Resume a Game</h3>
                             <form onSubmit={handleJoin} className="join-form">
                                 <label className="field">
-                                    <span>Game Code</span>
+                                    <span>Game Code (optional if joining is open)</span>
                                     <input
                                         value={gameCodeInput}
                                         onChange={(event) => setGameCodeInput(event.target.value.toUpperCase())}
                                         placeholder="ABCDE"
                                         maxLength={6}
-                                        required
-                                        autoComplete="off"
-                                    />
-                                </label>
-                                <label className="field">
-                                    <span>PIN</span>
-                                    <input
-                                        value={pinInput}
-                                        onChange={(event) => setPinInput(event.target.value)}
-                                        placeholder="123456"
-                                        required
                                         autoComplete="off"
                                     />
                                 </label>
@@ -751,14 +788,14 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
                                         <div className="round-actions">
                                             <button
                                                 type="button"
-                                                disabled={working || round.status === 'open'}
+                                                disabled={working || !socket.connected || round.status === 'open'}
                                                 onClick={() => handleRoundAction(round, 'open')}
                                             >
                                                 Open
                                             </button>
                                             <button
                                                 type="button"
-                                                disabled={working || round.status !== 'open'}
+                                                disabled={working || !socket.connected || round.status !== 'open'}
                                                 onClick={() => handleRoundAction(round, 'close')}
                                             >
                                                 Close
@@ -769,7 +806,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
                             })}
                         </ul>
                     ) : (
-                        <p className="empty-state">Connect with a game code and PIN to manage rounds.</p>
+                        <p className="empty-state">Connect with your host secret to manage rounds.</p>
                     )}
                 </section>
 
@@ -819,7 +856,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
                             <div className="panel-actions">
                                 <a
                                     className="ghost-link"
-                                    href={`/gamemaster/submissions?game=${encodeURIComponent(session?.gameCode ?? '')}&pin=${encodeURIComponent(session?.pin ?? '')}`}
+                                    href={`/gamemaster/submissions?game=${encodeURIComponent(session?.gameCode ?? '')}`}
                                 >
                                     Manage Submissions →
                                 </a>
@@ -891,7 +928,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
                         <div className="panel-actions">
                             <a
                                 className="ghost-link"
-                                href={`/gamemaster/teams?game=${encodeURIComponent(session?.gameCode ?? '')}&pin=${encodeURIComponent(session?.pin ?? '')}`}
+                                href={`/gamemaster/teams?game=${encodeURIComponent(session?.gameCode ?? '')}`}
                             >
                                 Manage Teams →
                             </a>
@@ -907,7 +944,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
                             <p className="empty-state">No teams to manage yet.</p>
                         )
                     ) : (
-                        <p className="empty-state">Connect with a game code and PIN to manage teams.</p>
+                        <p className="empty-state">Connect with your host secret to manage teams.</p>
                     )}
                 </section>
 

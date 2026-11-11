@@ -1,5 +1,6 @@
 import fs from 'fs';
-import { Sequelize } from 'sequelize';
+import path from 'path';
+import { Sequelize, Transaction } from 'sequelize';
 import { DATA_DIR, DB_STORAGE } from './config';
 import { Game, initGameModel } from './model/game';
 import { Question, initQuestionModel } from './model/question';
@@ -9,15 +10,22 @@ import { SubmissionResult, initSubmissionResultModel } from './model/submissionR
 import { Team, initTeamModel } from './model/team';
 import { Wager, initWagerModel } from './model/wager';
 
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+fs.mkdirSync(DB_STORAGE === ':memory:' ? DATA_DIR : path.dirname(DB_STORAGE), { recursive: true });
 
 export const sequelize = new Sequelize({
     dialect: 'sqlite',
     storage: DB_STORAGE,
     logging: false,
 });
+
+let transactionQueue = Promise.resolve();
+
+// SQLite has a single writer; queue transactions, including when tests share one in-memory connection.
+export function writeTransaction<T>(work: (transaction: Transaction) => Promise<T>): Promise<T> {
+    const result = transactionQueue.then(() => sequelize.transaction(work));
+    transactionQueue = result.then(() => undefined, () => undefined);
+    return result;
+}
 
 initGameModel(sequelize);
 initRoundModel(sequelize);
@@ -58,7 +66,8 @@ export async function initializeDatabase(): Promise<void> {
     await sequelize.authenticate();
     await sequelize.query('PRAGMA journal_mode = WAL;');
     await sequelize.query('PRAGMA foreign_keys = ON;');
-    await sequelize.sync({ alter: true });
+    await sequelize.query('PRAGMA busy_timeout = 5000;');
+    await sequelize.sync();
 }
 
 export { Game, Question, Round, Submission, SubmissionResult, Team, Wager };

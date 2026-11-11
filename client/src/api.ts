@@ -1,7 +1,7 @@
-import type { SubmissionView } from '@shared/types';
+import type { GameSummary, SubmissionView } from '@shared/types';
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '';
-const PIN_HEADER = 'x-trivia-pin';
+const PIN_HEADER = 'x-trivia-admin';
 
 function getApiBase(): string {
     if (API_BASE) {
@@ -15,25 +15,24 @@ function getApiBase(): string {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await fetch(`${getApiBase()}${path}`, {
-        credentials: 'include',
+        ...init,
+        signal: init.signal ?? AbortSignal.timeout(15_000),
         headers: {
             'Content-Type': 'application/json',
             ...(init.headers ?? {}),
         },
-        ...init,
     });
 
     if (!response.ok) {
         const text = await response.text();
-        try {
-            const payload = JSON.parse(text);
-            throw new Error(payload.error ?? text);
-        } catch (error) {
-            if (text) {
-                throw new Error(text);
+        let message = text || `Request failed with status ${response.status}`;
+        if (response.headers.get('content-type')?.includes('application/json') && text) {
+            const payload: unknown = JSON.parse(text);
+            if (payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string') {
+                message = payload.error;
             }
-            throw new Error(`Request failed with status ${response.status}`);
         }
+        throw new Error(message);
     }
 
     if (response.status === 204) {
@@ -45,14 +44,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export interface CreateGameInput {
     title: string;
-    pin: string;
+    adminSecret: string;
     code?: string;
 }
 
 export async function createGame(input: CreateGameInput) {
     return request<{ game: { id: string; code: string; title: string } }>(`/api/games`, {
         method: 'POST',
-        body: JSON.stringify(input),
+        headers: { [PIN_HEADER]: input.adminSecret },
+        body: JSON.stringify({ title: input.title, code: input.code }),
+    });
+}
+
+export async function fetchOpenGame() {
+    return request<{ game: GameSummary | null }>('/api/games/open');
+}
+
+export async function setJoiningOpen(gameCode: string, adminSecret: string, open: boolean) {
+    return request<void>(`/api/games/${gameCode}/joining`, {
+        method: 'POST',
+        headers: { [PIN_HEADER]: adminSecret },
+        body: JSON.stringify({ open }),
     });
 }
 
@@ -68,7 +80,7 @@ export async function importQuestionSet(gameCode: string, pin: string, payload: 
 }
 
 export async function joinTeam(gameCode: string, name: string) {
-    return request<{ teamId: string; teamToken: string; name: string; score: number }>(`/api/games/${gameCode}/teams`, {
+    return request<{ teamId: string; teamToken: string; name: string; score: number; game: GameSummary }>(`/api/games/${gameCode}/teams`, {
         method: 'POST',
         body: JSON.stringify({ name }),
     });

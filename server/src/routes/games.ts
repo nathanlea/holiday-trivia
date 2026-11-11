@@ -1,14 +1,12 @@
 import express, { Request, Response } from 'express';
-import { PIN_HEADER } from '../config';
+import { ADMIN_HEADER } from '../config';
 import { HttpError } from '../errors';
 import GameManager from '../gameManager';
 
-const router = express.Router();
-
 function getPinOrThrow(req: Request): string {
-    const pin = req.header(PIN_HEADER) ?? (req.body?.pin as string | undefined);
+    const pin = req.header(ADMIN_HEADER);
     if (!pin) {
-        throw new HttpError(401, 'PIN is required for this operation');
+        throw new HttpError(401, 'Host secret is required for this operation');
     }
     return pin;
 }
@@ -22,11 +20,34 @@ function handleError(res: Response, error: unknown): Response {
 }
 
 export function createApiRouter(manager: GameManager): express.Router {
+    const router = express.Router();
+
+    router.get('/games/open', async (_req: Request, res: Response) => {
+        try {
+            res.json({ game: await manager.getOpenGame() });
+        } catch (error) {
+            handleError(res, error);
+        }
+    });
+
+    router.post('/games/:code/joining', async (req: Request, res: Response) => {
+        try {
+            if (typeof req.body?.open !== 'boolean') {
+                throw new HttpError(400, 'open must be a boolean');
+            }
+            await manager.setJoiningOpen(req.params.code, getPinOrThrow(req), req.body.open);
+            res.status(204).send();
+        } catch (error) {
+            handleError(res, error);
+        }
+    });
+
     router.post('/games', async (req: Request, res: Response) => {
         try {
-            const { title, pin, code } = req.body ?? {};
-            if (typeof title !== 'string' || typeof pin !== 'string') {
-                throw new HttpError(400, 'Title and PIN are required');
+            const pin = getPinOrThrow(req);
+            const { title, code } = req.body ?? {};
+            if (typeof title !== 'string') {
+                throw new HttpError(400, 'Title is required');
             }
             const game = await manager.createGame(title, pin, typeof code === 'string' ? code : undefined);
             res.status(201).json({ game });
@@ -104,11 +125,10 @@ export function createApiRouter(manager: GameManager): express.Router {
             if (typeof teamId !== 'string' || typeof teamToken !== 'string' || typeof roundId !== 'string') {
                 throw new HttpError(400, 'teamId, teamToken, and roundId are required');
             }
-            const wagerAmount = Number(amount);
-            if (!Number.isFinite(wagerAmount)) {
-                throw new HttpError(400, 'Amount must be a number');
+            if (typeof amount !== 'number' || !Number.isInteger(amount)) {
+                throw new HttpError(400, 'Amount must be a whole number');
             }
-            await manager.submitWager(code, teamId, teamToken, roundId, Math.floor(wagerAmount));
+            await manager.submitWager(code, teamId, teamToken, roundId, amount);
             res.status(204).send();
         } catch (error) {
             handleError(res, error);

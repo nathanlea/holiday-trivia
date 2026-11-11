@@ -1,5 +1,13 @@
 Technical approach - Trivia MVP
 
+2026 architecture
+The current architecture uses a Cloudflare Worker for frontend assets and same-origin
+API/WebSocket proxying, and a single Node.js backend behind Caddy on a DigitalOcean
+droplet. SQLite lives in a Docker volume, with serialized write transactions.
+Host access uses one environment-configured secret; teams and scoreboard viewers do
+not use PINs. Deployment, backups, and the revised workflow are in
+[README.md](../README.md). The original local-MVP proposal below is historical.
+
 Overview
 We will build a locally-hosted MVP using TypeScript on Node.js + Express, WebSockets via the "ws" library, SQLite for persistence, and a React + TypeScript front-end. The goals are low-latency real-time updates, easy local deployment, and a small, maintainable codebase.
 

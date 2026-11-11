@@ -14,7 +14,7 @@ export class Game extends Model<InferAttributes<Game>, InferCreationAttributes<G
     declare id: CreationOptional<string>;
     declare code: string;
     declare title: string;
-    declare pinHash: string;
+    declare joiningOpen: CreationOptional<boolean>;
     declare createdAt: string;
     declare currentRoundId: string | null;
 
@@ -39,10 +39,11 @@ export function initGameModel(sequelize: Sequelize): typeof Game {
                 type: DataTypes.STRING,
                 allowNull: false,
             },
-            pinHash: {
-                type: DataTypes.STRING,
+            joiningOpen: {
+                type: DataTypes.BOOLEAN,
                 allowNull: false,
-                field: 'pin_hash',
+                defaultValue: false,
+                field: 'joining_open',
             },
             createdAt: {
                 type: DataTypes.STRING,
