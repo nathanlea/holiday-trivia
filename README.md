@@ -11,14 +11,24 @@ and a projector scoreboard.
   stay in the current browser tab's session storage, never in URLs or the frontend build.
   The scoreboard is public and read-only.
 - Answer drafts survive a refresh in the same tab. Connections retry after interruptions;
-  submission controls indicate disconnection and expired timers. Last year's browser
+  submission controls indicate disconnection. A floating timer stays visible while
+  teams scroll on their phones. Last year's browser
   sessions are ignored so returning players start fresh.
-- Deadlines are enforced on the server. Answers are accepted once per team per round;
+- Timers are advisory: answers and wagers remain open at zero until the host closes
+  the round. Answers are accepted once per team per round;
   repeat requests cannot double-count points. Numeric zero answers score correctly.
   SQLite writes are serialized for simultaneous submissions.
+- Teams may leave any answer blank. Blanks earn zero in regular rounds and lose the
+  wager in finals; point values must still be assigned to every regular question.
 - Future questions and unrevealed answers are omitted from public state. Closed-round
-  answers remain visible, as before. Grading on the dedicated submissions page now
-  requires **Save Grades** rather than silently saving as soon as every choice is set.
+  answers remain visible, as before. Every host grading action saves immediately,
+  updating totals by the difference from the previous grade. Save failures are shown
+  explicitly and can be retried.
+- The final in `questions.json` is numeric and automatically graded. The host sees
+  the expected answer, absolute/percentage difference, automatic score, and any
+  manual override. Text answers remain manually graded.
+- A high-contrast Christmas leaderboard uses large scores and up to three columns
+  for projector viewing, with shared ranks for ties and a single column on phones.
 - The frontend is served by a Cloudflare Worker. API and WebSocket requests are proxied
   through the same domain to a persistent backend; no cross-domain frontend settings
   are needed.
@@ -80,7 +90,7 @@ and run Wrangler with a local `BACKEND_ORIGIN`. Use
 Wrangler otherwise rewrites it based on the configured production domain. Allow
 that exact local origin on the rehearsal backend, not on the production server.
 
-Tests cover scoring, wagers, host access, joining, deadlines, public state,
+Tests cover scoring, wagers, host access, joining, advisory timers, public state,
 25 concurrent submissions, concurrent score adjustments, existing question files,
 API error messages, tied ranks, React WebSocket reconnect/resume behavior, and Worker
 proxy behavior.
@@ -168,8 +178,8 @@ scoreboard must all show **Connected/Live**, not just a successful health reques
 ### 4. Run the event
 
 1. Visit `/gamemaster`, enter the host secret, give the game a title, and import a
-   JSON question set. `questions_sample.json` and the existing `questiosn.json`
-   format are supported without changes. Creating a game closes joining for older
+   JSON question set. `questions_sample.json` and `questions.json`
+   are supported. Creating a game closes joining for older
    games and opens it for this game.
 2. Save the game code displayed in the host header. It is only needed to resume a
    game if joining has been closed. The secret stays in that browser tab until
@@ -180,12 +190,34 @@ scoreboard must all show **Connected/Live**, not just a successful health reques
 4. Open the projector link from the console. It contains only the game code and
    does not expose host credentials.
 5. Close joining after teams arrive. Open rounds one at a time; close them before
-   moving on. Timers reject late answers even if the host has not pressed Close.
-   Grades on the submissions page apply when **Save Grades** is pressed.
+   moving on. Timer expiry does not reject answers or wagers; **Close Round** does.
+   On the submissions page, Correct, Incorrect, Reset, and partial/custom credit
+   save immediately. Wait for confirmation; failures leave the saved grade unchanged
+   and show a retry message. There is no separate Save Grades step.
 6. For the final, open the wager stage first, then close it and open the final
    question. A wager can be changed only while its wager stage is open.
 7. Re-importing questions resets that game's scores, answers, and wagers. The
    console asks for confirmation if rounds already exist.
+
+### Numeric final scoring
+
+The final answer in `questions.json` is **39,006**. Both `39006` and `39,006`
+are accepted. Percentage error is absolute difference divided by the expected
+answer's absolute value:
+
+| Distance from the expected answer | Score change |
+| --- | --- |
+| At most 5% | Win the full wager |
+| More than 5%, at most 10% | Win half the wager, rounded to the nearest point |
+| More than 10%, at most 20% | No change |
+| More than 20%, or a blank answer | Lose the full wager |
+
+Thresholds are inclusive and configured in `numericConfig.ranges` and
+`numericConfig.wagerLossThresholds`. Expected zero matches only zero; other values
+have no finite percentage error. The host may override any automatic grade, including
+zero-point results. Correct/Incorrect explicitly apply the full win/loss; Custom
+accepts negative points for final-round penalties. Reset removes the grade and its
+points until the host grades it again.
 
 ## Updates, backups, and teardown
 

@@ -1,16 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import type { GamemasterGameState, SubmissionView } from '@shared/types';
 import { gradeSubmission } from '../api';
 import { useTriviaSocket } from '../hooks/useTriviaSocket';
 import { loadHostSession } from '../hostSession';
+import NumericGradeComparison from '../components/NumericGradeComparison';
 
 type SubmissionStatus = SubmissionView['answers'][number]['status'];
-type GradeDraft = {
-    status: SubmissionStatus;
-    awardedPoints?: number;
-};
-type SubmissionDrafts = Record<string, Record<string, GradeDraft>>;
 
 function GamemasterSubmissionsPage(): JSX.Element {
     const [searchParams] = useSearchParams();
@@ -20,8 +16,8 @@ function GamemasterSubmissionsPage(): JSX.Element {
     const pin = hostSession?.gameCode === gameCode ? hostSession.adminSecret : null;
 
     const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-    const [gradeDrafts, setGradeDrafts] = useState<SubmissionDrafts>({});
     const [working, setWorking] = useState(false);
+    const savingRef = useRef(false);
     const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
     const socket = useTriviaSocket(
@@ -91,10 +87,7 @@ function GamemasterSubmissionsPage(): JSX.Element {
         const tiles = gmState.scoreboard.map((entry) => {
             const submission = submissionsByTeam.get(entry.teamId);
             const statuses = submission
-                ? submission.answers.map((answer) => {
-                    const draft = gradeDrafts[submission.id]?.[answer.questionId];
-                    return draft?.status ?? answer.status;
-                })
+                ? submission.answers.map((answer) => answer.status)
                 : [];
             const status: 'waiting' | 'in_review' | 'graded' = submission
                 ? statuses.every((state) => state === 'correct' || state === 'incorrect')
@@ -114,10 +107,7 @@ function GamemasterSubmissionsPage(): JSX.Element {
 
         submissionsForActiveRound.forEach((submission) => {
             if (!tiles.some((tile) => tile.teamId === submission.teamId)) {
-                const statuses = submission.answers.map((answer) => {
-                    const draft = gradeDrafts[submission.id]?.[answer.questionId];
-                    return draft?.status ?? answer.status;
-                });
+                const statuses = submission.answers.map((answer) => answer.status);
                 const status: 'waiting' | 'in_review' | 'graded' = statuses.every((state) => state === 'correct' || state === 'incorrect')
                     ? 'graded'
                     : 'in_review';
@@ -133,34 +123,7 @@ function GamemasterSubmissionsPage(): JSX.Element {
         });
 
         return tiles;
-    }, [gmState, submissionsByTeam, submissionsForActiveRound, gradeDrafts]);
-
-    useEffect(() => {
-        if (!gmState) {
-            return;
-        }
-        setGradeDrafts((current) => {
-            const next: SubmissionDrafts = { ...current };
-            gmState.submissions.forEach((submission) => {
-                if (!next[submission.id]) {
-                    next[submission.id] = {};
-                }
-                submission.answers.forEach((answer) => {
-                    if (!next[submission.id][answer.questionId]) {
-                        const fullPoints = answer.pointValue ?? submission.wagerAmount ?? 0;
-                        const defaultPoints = answer.status === 'correct'
-                            ? fullPoints
-                            : answer.status === 'incorrect' && submission.wagerAmount != null ? -fullPoints : 0;
-                        next[submission.id][answer.questionId] = {
-                            status: answer.status,
-                            awardedPoints: answer.awardedPoints !== defaultPoints ? answer.awardedPoints : undefined,
-                        };
-                    }
-                });
-            });
-            return next;
-        });
-    }, [gmState]);
+    }, [gmState, submissionsByTeam, submissionsForActiveRound]);
 
     useEffect(() => {
         if (!gmState) {
@@ -175,7 +138,7 @@ function GamemasterSubmissionsPage(): JSX.Element {
         }
 
         const pendingTile = teamTiles.find((tile) => tile.status === 'in_review');
-        const fallbackTile = pendingTile ?? teamTiles.find((tile) => tile.status === 'waiting') ?? teamTiles[0] ?? null;
+        const fallbackTile = pendingTile ?? teamTiles.find((tile) => tile.submissionId !== null) ?? teamTiles[0] ?? null;
         const nextId = fallbackTile?.teamId ?? null;
 
         if (nextId !== selectedTeamId) {
@@ -183,56 +146,33 @@ function GamemasterSubmissionsPage(): JSX.Element {
         }
     }, [gmState, teamTiles, selectedTeamId]);
 
-    const handleGradeChange = (submissionId: string, questionId: string, status: SubmissionStatus, awardedPoints?: number) => {
-        setGradeDrafts((current) => {
-            return {
-                ...current,
-                [submissionId]: {
-                    ...(current[submissionId] ?? {}),
-                    [questionId]: { status, awardedPoints },
-                },
-            };
-        });
-    };
-
-    const handleSubmitGrades = async (submission: SubmissionView) => {
-        if (!gameCode || !pin) {
+    const handleGradeChange = async (submissionId: string, questionId: string, status: SubmissionStatus, awardedPoints?: number) => {
+        if (savingRef.current) {
+            setStatusMessage('Please wait for the current grade to finish saving.');
             return;
         }
-        const draft = gradeDrafts[submission.id];
-        if (!draft) {
-            setStatusMessage('No grades selected for this submission.');
+        const submission = gmState?.submissions.find((entry) => entry.id === submissionId);
+        const answer = submission?.answers.find((entry) => entry.questionId === questionId);
+        const round = gmState?.rounds.find((entry) => entry.id === submission?.roundId);
+        if (!gameCode || !pin || !submission || !answer || !round) {
+            setStatusMessage('Unable to find this submission. Reconnect before grading.');
             return;
         }
-
+        const fullPoints = round.isFinal ? submission.wagerAmount ?? 0 : answer.pointValue ?? 0;
+        const defaultPoints = status === 'correct' ? fullPoints
+            : status === 'incorrect' && round.isFinal ? -fullPoints : 0;
+        savingRef.current = true;
         try {
             setWorking(true);
-            await gradeSubmission(gameCode, pin, submission.id, submission.answers.map((answer) => {
-                const gradeDraft = draft[answer.questionId];
-                return {
-                    questionId: answer.questionId,
-                    status: gradeDraft?.status ?? answer.status,
-                    awardedPoints: gradeDraft?.awardedPoints,
-                };
-            }));
-            setStatusMessage(`Grades submitted for ${submission.teamName}.`);
-
-            // Auto-advance to next team with ungraded submissions
-            setTimeout(() => {
-                if (!gmState) return;
-
-                // Find next team that needs grading
-                const nextTile = teamTiles.find((tile) =>
-                    tile.teamId !== submission.teamId && tile.status === 'in_review'
-                );
-
-                if (nextTile) {
-                    setSelectedTeamId(nextTile.teamId);
-                }
-            }, 300); // Small delay to allow state to update
+            setStatusMessage(`Saving grade for ${submission.teamName}...`);
+            await gradeSubmission(gameCode, pin, submissionId, [{
+                questionId, status, awardedPoints: awardedPoints ?? defaultPoints,
+            }]);
+            setStatusMessage(`Grade saved for ${submission.teamName}. Total updated.`);
         } catch (error) {
-            setStatusMessage(error instanceof Error ? error.message : 'Unable to submit grades.');
+            setStatusMessage(`Grade not saved. ${error instanceof Error ? error.message : 'Unable to save grade.'} Please retry.`);
         } finally {
+            savingRef.current = false;
             setWorking(false);
         }
     };
@@ -263,7 +203,7 @@ function GamemasterSubmissionsPage(): JSX.Element {
             <div className="page-header">
                 <div>
                     <h2>Manage Submissions{activeRound ? ` – ${activeRound.label}` : ''}</h2>
-                    <p className="page-subhead">Review and grade team submissions for the current round.</p>
+                    <p className="page-subhead">Each grading action saves immediately and updates the total. Change a grade any time.</p>
                 </div>
                 <button type="button" className="ghost-button" onClick={() => navigate('/gamemaster')}>
                     ← Back to Console
@@ -271,7 +211,7 @@ function GamemasterSubmissionsPage(): JSX.Element {
             </div>
 
             {statusMessage && (
-                <div className="status-banner">
+                <div className="status-banner" role="status">
                     {statusMessage}
                     <button type="button" onClick={() => setStatusMessage(null)}>×</button>
                 </div>
@@ -338,12 +278,11 @@ function GamemasterSubmissionsPage(): JSX.Element {
                                         </header>
                                         <div className="submission-answers">
                                             {selectedSubmission.answers.map((answer) => {
-                                                const gradeDraft = gradeDrafts[selectedSubmission.id]?.[answer.questionId];
-                                                const draftStatus = gradeDraft?.status ?? answer.status;
+                                                const draftStatus = answer.status;
                                                 const question = selectedRound?.questions.find((entry) => entry.id === answer.questionId);
                                                 const hasChoices = Boolean(question?.choices && question.choices.length);
-                                                const isNumeric = question?.type === 'numeric';
-                                                const isAutoGraded = isNumeric && answer.status !== 'pending';
+                                                const fullPoints = selectedRound?.isFinal
+                                                    ? selectedSubmission.wagerAmount ?? 0 : answer.pointValue ?? 0;
                                                 return (
                                                     <article key={answer.questionId} className="submission-answer">
                                                         <header className="submission-answer-header">
@@ -357,19 +296,13 @@ function GamemasterSubmissionsPage(): JSX.Element {
                                                                 {answer.pointValue != null && !selectedRound?.isFinal && (
                                                                     <span>Value {answer.pointValue}</span>
                                                                 )}
-                                                                {isAutoGraded && answer.awardedPoints !== 0 && (
-                                                                    <span>Awarded {answer.awardedPoints} pts</span>
-                                                                )}
+                                                                <span>Awarded {answer.awardedPoints} pts</span>
                                                                 <span className={`submission-answer-status submission-answer-status--${draftStatus}`}>
-                                                                    {isAutoGraded
-                                                                        ? 'Auto-scored'
-                                                                        : gradeDraft?.awardedPoints !== undefined
-                                                                            ? `Partial credit (${gradeDraft.awardedPoints} pts)`
-                                                                            : draftStatus === 'correct'
-                                                                                ? 'Marked correct'
-                                                                                : draftStatus === 'incorrect'
-                                                                                    ? 'Marked incorrect'
-                                                                                    : 'Awaiting decision'}
+                                                                    {draftStatus === 'correct'
+                                                                        ? 'Marked correct'
+                                                                        : draftStatus === 'incorrect'
+                                                                            ? 'Marked incorrect'
+                                                                            : 'Awaiting decision'}
                                                                 </span>
                                                             </div>
                                                         </header>
@@ -385,137 +318,135 @@ function GamemasterSubmissionsPage(): JSX.Element {
                                                             <p className="submission-answer-hint">Correct answer: {question.correctAnswerText}</p>
                                                         )}
                                                         {question?.numericConfig && (
-                                                            <p className="submission-answer-hint">
-                                                                Correct answer: {question.numericConfig.correctAnswer}
-                                                            </p>
+                                                            <NumericGradeComparison
+                                                                response={answer.response}
+                                                                config={question.numericConfig}
+                                                                assignedPoints={fullPoints}
+                                                                isFinal={Boolean(selectedRound?.isFinal)}
+                                                                awardedPoints={answer.awardedPoints}
+                                                                status={answer.status}
+                                                            />
                                                         )}
-                                                        {!isAutoGraded && (
-                                                            <>
-                                                                <div
-                                                                    className="grade-toggle"
-                                                                    role="group"
-                                                                    aria-label={`Grade ${question?.text ?? 'answer'}`}
+                                                        <fieldset className="grade-controls" disabled={working || !socket.connected}>
+                                                            <legend className="sr-only">Grade this answer (saves immediately)</legend>
+                                                            <div
+                                                                className="grade-toggle"
+                                                                role="group"
+                                                                aria-label={`Grade ${question?.text ?? 'answer'}`}
+                                                            >
+                                                                <button
+                                                                    type="button"
+                                                                    className={`grade-button grade-button--correct${draftStatus === 'correct' && answer.awardedPoints === fullPoints ? ' active' : ''}`}
+                                                                    onClick={() =>
+                                                                        handleGradeChange(
+                                                                            selectedSubmission.id,
+                                                                            answer.questionId,
+                                                                            'correct',
+                                                                            undefined,
+                                                                        )
+                                                                    }
                                                                 >
-                                                                    <button
-                                                                        type="button"
-                                                                        className={`grade-button grade-button--correct${draftStatus === 'correct' && gradeDraft?.awardedPoints === undefined ? ' active' : ''}`}
-                                                                        onClick={() =>
-                                                                            handleGradeChange(
-                                                                                selectedSubmission.id,
-                                                                                answer.questionId,
-                                                                                'correct',
-                                                                                undefined,
-                                                                            )
-                                                                        }
-                                                                    >
-                                                                        Correct
-                                                                    </button>
-                                                                    <button
-                                                                        type="button"
-                                                                        className={`grade-button grade-button--incorrect${draftStatus === 'incorrect' ? ' active' : ''}`}
-                                                                        onClick={() =>
-                                                                            handleGradeChange(
-                                                                                selectedSubmission.id,
-                                                                                answer.questionId,
-                                                                                'incorrect',
-                                                                                undefined,
-                                                                            )
-                                                                        }
-                                                                    >
-                                                                        Incorrect
-                                                                    </button>
-                                                                    <button
-                                                                        type="button"
-                                                                        className={`grade-button grade-button--pending${draftStatus === 'pending' ? ' active' : ''}`}
-                                                                        onClick={() =>
-                                                                            handleGradeChange(
-                                                                                selectedSubmission.id,
-                                                                                answer.questionId,
-                                                                                'pending',
-                                                                                undefined,
-                                                                            )
-                                                                        }
-                                                                    >
-                                                                        Reset
-                                                                    </button>
-                                                                </div>
-                                                                {answer.pointValue != null && (() => {
-                                                                    const pointValue = answer.pointValue;
-                                                                    const pts80 = Math.round(pointValue * 0.8);
-                                                                    const pts50 = Math.round(pointValue * 0.5);
-                                                                    return (
-                                                                        <div className="partial-credit-controls">
-                                                                            <span className="partial-credit-label">Partial Credit:</span>
-                                                                            <div className="partial-credit-buttons">
-                                                                                <button
-                                                                                    type="button"
-                                                                                    className={`grade-button grade-button--partial${gradeDraft?.awardedPoints === pts80 ? ' active' : ''}`}
-                                                                                    onClick={() =>
-                                                                                        handleGradeChange(
-                                                                                            selectedSubmission.id,
-                                                                                            answer.questionId,
-                                                                                            'correct',
-                                                                                            pts80,
-                                                                                        )
-                                                                                    }
-                                                                                >
-                                                                                    80% ({pts80} pts)
-                                                                                </button>
-                                                                                <button
-                                                                                    type="button"
-                                                                                    className={`grade-button grade-button--partial${gradeDraft?.awardedPoints === pts50 ? ' active' : ''}`}
-                                                                                    onClick={() =>
-                                                                                        handleGradeChange(
-                                                                                            selectedSubmission.id,
-                                                                                            answer.questionId,
-                                                                                            'correct',
-                                                                                            pts50,
-                                                                                        )
-                                                                                    }
-                                                                                >
-                                                                                    50% ({pts50} pts)
-                                                                                </button>
-                                                                                <button
-                                                                                    type="button"
-                                                                                    className="grade-button grade-button--partial"
-                                                                                    onClick={() => {
-                                                                                        const customPoints = prompt(`Enter custom points (max ${pointValue}):`, gradeDraft?.awardedPoints?.toString() ?? '');
-                                                                                        if (customPoints !== null) {
-                                                                                            const points = parseFloat(customPoints);
-                                                                                            if (!isNaN(points) && points >= 0 && points <= pointValue) {
-                                                                                                handleGradeChange(
-                                                                                                    selectedSubmission.id,
-                                                                                                    answer.questionId,
-                                                                                                    'correct',
-                                                                                                    points,
-                                                                                                );
-                                                                                            } else {
-                                                                                                alert(`Please enter a valid number between 0 and ${pointValue}`);
-                                                                                            }
+                                                                    Correct
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    className={`grade-button grade-button--incorrect${draftStatus === 'incorrect' ? ' active' : ''}`}
+                                                                    onClick={() =>
+                                                                        handleGradeChange(
+                                                                            selectedSubmission.id,
+                                                                            answer.questionId,
+                                                                            'incorrect',
+                                                                            undefined,
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    Incorrect
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    className={`grade-button grade-button--pending${draftStatus === 'pending' ? ' active' : ''}`}
+                                                                    onClick={() =>
+                                                                        handleGradeChange(
+                                                                            selectedSubmission.id,
+                                                                            answer.questionId,
+                                                                            'pending',
+                                                                            undefined,
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    Reset
+                                                                </button>
+                                                            </div>
+                                                            {(() => {
+                                                                const pointValue = fullPoints;
+                                                                const pts80 = Math.round(pointValue * 0.8);
+                                                                const pts50 = Math.round(pointValue * 0.5);
+                                                                return (
+                                                                    <div className="partial-credit-controls">
+                                                                        <span className="partial-credit-label">Partial Credit:</span>
+                                                                        <div className="partial-credit-buttons">
+                                                                            <button
+                                                                                type="button"
+                                                                                className={`grade-button grade-button--partial${draftStatus !== 'pending' && answer.awardedPoints === pts80 ? ' active' : ''}`}
+                                                                                onClick={() =>
+                                                                                    handleGradeChange(
+                                                                                        selectedSubmission.id,
+                                                                                        answer.questionId,
+                                                                                        'correct',
+                                                                                        pts80,
+                                                                                    )
+                                                                                }
+                                                                            >
+                                                                                80% ({pts80} pts)
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                className={`grade-button grade-button--partial${draftStatus !== 'pending' && answer.awardedPoints === pts50 ? ' active' : ''}`}
+                                                                                onClick={() =>
+                                                                                    handleGradeChange(
+                                                                                        selectedSubmission.id,
+                                                                                        answer.questionId,
+                                                                                        'correct',
+                                                                                        pts50,
+                                                                                    )
+                                                                                }
+                                                                            >
+                                                                                50% ({pts50} pts)
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                className="grade-button grade-button--partial"
+                                                                                onClick={() => {
+                                                                                    const minPoints = selectedRound?.isFinal ? -pointValue : 0;
+                                                                                    const customPoints = prompt(`Enter custom points (${minPoints} to ${pointValue}):`, answer.awardedPoints.toString());
+                                                                                    if (customPoints !== null) {
+                                                                                        const points = Number(customPoints);
+                                                                                        if (customPoints.trim() && Number.isFinite(points) && points >= minPoints && points <= pointValue) {
+                                                                                            handleGradeChange(
+                                                                                                selectedSubmission.id,
+                                                                                                answer.questionId,
+                                                                                                points > 0 ? 'correct' : 'incorrect',
+                                                                                                points,
+                                                                                            );
+                                                                                        } else {
+                                                                                            alert(`Please enter a valid number between ${minPoints} and ${pointValue}`);
                                                                                         }
-                                                                                    }}
-                                                                                >
-                                                                                    Custom
-                                                                                </button>
-                                                                            </div>
+                                                                                    }
+                                                                                }}
+                                                                            >
+                                                                                Custom
+                                                                            </button>
                                                                         </div>
-                                                                    );
-                                                                })()}
-                                                            </>
-                                                        )}
+                                                                    </div>
+                                                                );
+                                                            })()}
+                                                        </fieldset>
                                                     </article>
                                                 );
                                             })}
                                         </div>
                                         <div className="form-actions submission-detail-actions">
-                                            <button
-                                                type="button"
-                                                className="primary"
-                                                disabled={working || !socket.connected}
-                                                onClick={() => handleSubmitGrades(selectedSubmission)}
-                                            >
-                                                {working ? 'Saving...' : 'Save Grades'}
-                                            </button>
+                                            <span role="status">{working ? 'Saving grade...' : 'Grades save automatically.'}</span>
                                         </div>
                                     </div>
                                 ) : (

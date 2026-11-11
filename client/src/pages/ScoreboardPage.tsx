@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import ScoreboardTable from '../components/ScoreboardTable';
+import ScoreboardLeaderboard from '../components/ScoreboardLeaderboard';
 import { fetchOpenGame } from '../api';
 import { useTriviaSocket } from '../hooks/useTriviaSocket';
 
@@ -34,14 +34,18 @@ function ScoreboardPage(): JSX.Element {
     return (
         <div className="scoreboard-display">
             <header className="scoreboard-display-header">
+                <p className="scoreboard-display-eyebrow">The North Pole scoreboard</p>
                 <h1>{state?.game.title ?? 'Holiday Trivia'}</h1>
-                <p className="scoreboard-display-round">{activeRound?.label ?? 'Live leaderboard'}</p>
+                <p className="scoreboard-display-round">
+                    {activeRound?.label ?? 'Season\'s standings'}
+                    {state && ` · ${state.scoreboard.length} ${state.scoreboard.length === 1 ? 'team' : 'teams'}`}
+                </p>
                 <p className="scoreboard-display-note">{state?.waitingMessage ?? (!gameCode ? 'Waiting for the host to open a game.' : 'Welcome, trivia teams!')}</p>
             </header>
             {(error || socket.error) && <p className="error" role="alert">{error ?? socket.error}</p>}
-            <div className="scoreboard-display-table">
-                <ScoreboardTable scores={state?.scoreboard ?? []} />
-            </div>
+            <section className="scoreboard-display-rankings" aria-label="Live leaderboard">
+                <ScoreboardLeaderboard scores={state?.scoreboard ?? []} />
+            </section>
             <footer className="scoreboard-display-footer">
                 <span className={`connection-indicator ${socket.connected ? 'online' : 'offline'}`}>
                     {socket.connected ? 'Live' : gameCode ? 'Reconnecting...' : 'Waiting for game'}

@@ -15,10 +15,12 @@ import { HttpError, assert } from './errors';
 import { generateGameCode, generateToken, normalizeName, nowUtc } from './utils';
 import { TEAM_TOKEN_BYTES } from './config';
 import { assertAdminSecret } from './auth';
+import { gradeNumericResponse, parseNumericResponse } from '../../shared/numericScoring';
 import {
     ClientRole,
     GameSummary,
     GamemasterGameState,
+    NumericScoringConfig,
     RoundQuestionView,
     RoundStateView,
     RoundStatus,
@@ -58,20 +60,7 @@ interface ImportQuestion {
     correctChoiceIndices?: number[];
     answer?: string | number;
     explanation?: string;
-    numericConfig?: {
-        correctAnswer: number;
-        ranges: Array<{
-            maxPercentOff: number;
-            /** Points percentage (can exceed 100 for bonus, e.g., 125 for exact answer) */
-            pointsPercent: number;
-        }>;
-        /** Optional wager loss thresholds for final round numeric questions */
-        wagerLossThresholds?: Array<{
-            maxPercentOff: number;
-            /** Percentage of wager points to lose (0 = keep all, 100 = lose all) */
-            wagerLossPercent: number;
-        }>;
-    };
+    numericConfig?: NumericScoringConfig;
 }
 
 interface ImportRound {
@@ -416,7 +405,6 @@ export class GameManager {
 
         if (round.mode === 'wager') {
             assert(round.status === 'open', 400, 'Wager round must be open to submit a wager');
-            this.assertWithinDeadline(round);
             assert(round.linkedRoundId, 500, 'Wager round is missing a linked final round');
             const linkedRound = await this.getRoundById(round.linkedRoundId);
             assert(linkedRound.gameId === game.id, 400, 'Linked final round does not belong to this game');
@@ -425,7 +413,6 @@ export class GameManager {
             assert(round.isFinal, 400, 'Wagers are only allowed on the final round');
             const wagerRound = await Round.findOne({ where: { gameId: game.id, mode: 'wager', linkedRoundId: round.id } });
             assert(wagerRound?.status === 'open', 400, 'Wagers are only accepted while the wager round is open');
-            this.assertWithinDeadline(wagerRound);
         }
         assert(Number.isInteger(amount) && amount >= 0, 400, 'Wager must be a non-negative whole number');
         assert(amount <= team.score, 400, 'Wager cannot exceed current team score');
@@ -439,7 +426,6 @@ export class GameManager {
             assert(acceptingRound, 400, 'Wager round not found');
             await acceptingRound.reload({ transaction });
             assert(acceptingRound.status === 'open', 409, 'Wager round is closed');
-            this.assertWithinDeadline(acceptingRound);
             const existing = await Wager.findOne({ where: { teamId: team.id, roundId: targetRound.id }, transaction });
             if (existing) {
                 await existing.update({ amount, lockedAt }, { transaction });
@@ -472,18 +458,17 @@ export class GameManager {
         const round = await this.getRoundById(roundId);
         assert(round.gameId === game.id, 400, 'Round does not belong to this game');
         assert(round.status === 'open', 400, 'Round is not accepting submissions');
-        this.assertWithinDeadline(round);
         assert(round.mode !== 'wager', 400, 'This round only accepts wagers');
 
         const questions = await this.getQuestionsForRound(round.id);
-        assert(questions.length === answers.length, 400, 'All questions must be answered');
+        assert(questions.length === answers.length, 400, 'Include an entry for each question; responses may be blank');
 
         const pointOptions = JSON.parse(round.pointOptions) as number[];
         const answerMap = new Map<string, AnswerPayload>();
         answers.forEach((answer) => {
             assert(answer && typeof answer.questionId === 'string' &&
-                typeof answer.response === 'string' && answer.response.trim().length > 0 &&
-                answer.response.length <= 2000, 400, 'Each answer must contain 1 to 2000 characters');
+                typeof answer.response === 'string' &&
+                answer.response.length <= 2000, 400, 'Each answer must be text with at most 2000 characters');
             answerMap.set(answer.questionId, answer);
         });
 
@@ -491,8 +476,8 @@ export class GameManager {
         for (const question of questions) {
             const answer = answerMap.get(question.id);
             assert(answer, 400, 'Answer missing for question');
-            if (question.type === 'numeric') {
-                assert(Number.isFinite(Number(answer.response)), 400, 'Numeric answers must be valid numbers');
+            if (question.type === 'numeric' && answer.response.trim()) {
+                assert(parseNumericResponse(answer.response) !== null, 400, 'Numeric answers must be valid numbers');
             }
 
             if (round.isFinal) {
@@ -518,7 +503,6 @@ export class GameManager {
         await writeTransaction(async (transaction: Transaction) => {
             await round.reload({ transaction });
             assert(round.status === 'open', 409, 'Round is not accepting submissions');
-            this.assertWithinDeadline(round);
             const existing = await Submission.findOne({
                 where: { teamId: team.id, roundId: round.id },
                 transaction,
@@ -546,56 +530,15 @@ export class GameManager {
                 const answer = answerMap.get(question.id)!;
                 const assignedPoint = round.isFinal ? wager?.amount ?? 0 : answer.pointValue ?? 0;
 
-                // Auto-score numeric questions
                 let status: 'pending' | 'correct' | 'incorrect' = 'pending';
                 let awardedPoints = 0;
 
-                if (question.type === 'numeric' && question.numericConfigJson) {
-                    const numericConfig = JSON.parse(question.numericConfigJson);
-                    const submittedValue = Number(answer.response);
-
-                    if (Number.isFinite(submittedValue) && Number.isFinite(numericConfig.correctAnswer)) {
-                        const percentOff = numericConfig.correctAnswer === 0
-                            ? (submittedValue === 0 ? 0 : Infinity)
-                            : Math.abs((submittedValue - numericConfig.correctAnswer) / numericConfig.correctAnswer) * 100;
-
-                        // Find the applicable scoring range (pointsPercent can exceed 100 for bonus)
-                        const sortedRanges = [...numericConfig.ranges].sort((a: { maxPercentOff: number; pointsPercent: number }, b: { maxPercentOff: number; pointsPercent: number }) => a.maxPercentOff - b.maxPercentOff);
-                        let pointsPercent = 0;
-
-                        for (const range of sortedRanges) {
-                            if (percentOff <= range.maxPercentOff) {
-                                pointsPercent = range.pointsPercent;
-                                break;
-                            }
-                        }
-
-                        if (pointsPercent > 0) {
-                            status = 'correct';
-                            // pointsPercent can exceed 100 (e.g., 125% for exact answers)
-                            awardedPoints = Math.round((assignedPoint * pointsPercent) / 100);
-                        } else {
-                            status = 'incorrect';
-                            // For final round numeric questions, use wagerLossThresholds if defined
-                            if (round.isFinal && numericConfig.wagerLossThresholds && numericConfig.wagerLossThresholds.length > 0) {
-                                const sortedLossThresholds = [...numericConfig.wagerLossThresholds].sort(
-                                    (a: { maxPercentOff: number; wagerLossPercent: number }, b: { maxPercentOff: number; wagerLossPercent: number }) => a.maxPercentOff - b.maxPercentOff
-                                );
-                                let wagerLossPercent = 100; // Default: lose all if beyond all thresholds
-
-                                for (const threshold of sortedLossThresholds) {
-                                    if (percentOff <= threshold.maxPercentOff) {
-                                        wagerLossPercent = threshold.wagerLossPercent;
-                                        break;
-                                    }
-                                }
-
-                                awardedPoints = -Math.round((assignedPoint * wagerLossPercent) / 100);
-                            } else {
-                                awardedPoints = round.isFinal ? -assignedPoint : 0;
-                            }
-                        }
-                    }
+                if (!answer.response.trim()) {
+                    status = 'incorrect';
+                    awardedPoints = round.isFinal ? -assignedPoint : 0;
+                } else if (question.type === 'numeric' && question.numericConfigJson) {
+                    const config = JSON.parse(question.numericConfigJson) as NumericScoringConfig;
+                    ({ status, awardedPoints } = gradeNumericResponse(answer.response, config, assignedPoint, round.isFinal));
                 }
 
                 await SubmissionResult.create(
@@ -612,26 +555,24 @@ export class GameManager {
                 );
             }
 
-            // Auto-update team score and submission status for numeric questions
-            if (questions.some(q => q.type === 'numeric' && q.numericConfigJson)) {
-                const results = await SubmissionResult.findAll({
-                    where: { submissionId },
-                    transaction,
-                });
+            const results = await SubmissionResult.findAll({
+                where: { submissionId },
+                transaction,
+            });
 
-                const totalAwarded = results.reduce((sum, r) => sum + r.awardedPoints, 0);
-                const allAutoGraded = results.every(r => r.status !== 'pending');
+            const totalAwarded = results.reduce((sum, result) => sum + result.awardedPoints, 0);
+            const allAutoGraded = results.every(result => result.status !== 'pending');
 
-                if (totalAwarded !== 0) {
-                    await team.update({ score: team.score + totalAwarded }, { transaction });
-                }
+            if (totalAwarded !== 0) {
+                await team.reload({ transaction });
+                await team.update({ score: team.score + totalAwarded }, { transaction });
+            }
 
-                if (allAutoGraded) {
-                    await Submission.update(
-                        { status: 'graded' },
-                        { where: { id: submissionId }, transaction }
-                    );
-                }
+            if (allAutoGraded) {
+                await Submission.update(
+                    { status: 'graded' },
+                    { where: { id: submissionId }, transaction }
+                );
             }
         });
 
@@ -733,9 +674,7 @@ export class GameManager {
                 transaction,
             });
 
-            if (pending === 0) {
-                await submission.update({ status: 'graded' }, { transaction });
-            }
+            await submission.update({ status: pending === 0 ? 'graded' : 'submitted' }, { transaction });
 
             if (scoreDelta !== 0) {
                 const nextScore = team.score + scoreDelta;
@@ -1147,13 +1086,6 @@ export class GameManager {
         return Math.max(0, Math.ceil((end - Date.now()) / 1000));
     }
 
-    private assertWithinDeadline(round: Round): void {
-        if (round.openedAt && round.timeLimitSeconds !== null && round.timeLimitSeconds > 0) {
-            assert(Date.now() < Date.parse(round.openedAt) + round.timeLimitSeconds * 1000,
-                409, 'Time is up for this round');
-        }
-    }
-
     private async getScoreboardForGame(gameId: string): Promise<TeamScore[]> {
         const teams = await Team.findAll({
             where: { gameId },
@@ -1232,19 +1164,19 @@ export class GameManager {
                     }
                 } else if (question.type === 'numeric') {
                     assert(question.numericConfig, 400, 'Numeric questions require numericConfig');
-                    assert(typeof question.numericConfig.correctAnswer === 'number', 400, 'numericConfig.correctAnswer must be a number');
+                    assert(Number.isFinite(question.numericConfig.correctAnswer), 400, 'numericConfig.correctAnswer must be a finite number');
                     assert(Array.isArray(question.numericConfig.ranges) && question.numericConfig.ranges.length > 0, 400, 'numericConfig.ranges must be a non-empty array');
                     question.numericConfig.ranges.forEach((range, rIndex) => {
-                        assert(typeof range.maxPercentOff === 'number' && range.maxPercentOff >= 0, 400, `Range ${rIndex + 1}: maxPercentOff must be a non-negative number`);
+                        assert(Number.isFinite(range.maxPercentOff) && range.maxPercentOff >= 0, 400, `Range ${rIndex + 1}: maxPercentOff must be a finite non-negative number`);
                         // pointsPercent can exceed 100 (e.g., 125% bonus for exact answers)
-                        assert(typeof range.pointsPercent === 'number' && range.pointsPercent >= 0, 400, `Range ${rIndex + 1}: pointsPercent must be a non-negative number`);
+                        assert(Number.isFinite(range.pointsPercent) && range.pointsPercent >= 0, 400, `Range ${rIndex + 1}: pointsPercent must be a finite non-negative number`);
                     });
                     // Validate wagerLossThresholds if present
                     if (question.numericConfig.wagerLossThresholds) {
                         assert(Array.isArray(question.numericConfig.wagerLossThresholds), 400, 'wagerLossThresholds must be an array');
                         question.numericConfig.wagerLossThresholds.forEach((threshold, tIndex) => {
-                            assert(typeof threshold.maxPercentOff === 'number' && threshold.maxPercentOff >= 0, 400, `Wager loss threshold ${tIndex + 1}: maxPercentOff must be a non-negative number`);
-                            assert(typeof threshold.wagerLossPercent === 'number' && threshold.wagerLossPercent >= 0 && threshold.wagerLossPercent <= 100, 400, `Wager loss threshold ${tIndex + 1}: wagerLossPercent must be between 0 and 100`);
+                            assert(Number.isFinite(threshold.maxPercentOff) && threshold.maxPercentOff >= 0, 400, `Wager loss threshold ${tIndex + 1}: maxPercentOff must be a finite non-negative number`);
+                            assert(Number.isFinite(threshold.wagerLossPercent) && threshold.wagerLossPercent >= 0 && threshold.wagerLossPercent <= 100, 400, `Wager loss threshold ${tIndex + 1}: wagerLossPercent must be between 0 and 100`);
                         });
                     }
                 } else {

@@ -7,7 +7,8 @@ These replace the original local-only hosting and PIN requirements below:
 - One Docker-hosted backend on a DigitalOcean droplet with persistent SQLite.
 - One server-configured host secret for all management; no per-game PIN.
 - Public read-only scoreboard; teams join the one open game using only a team name.
-- Server-enforced deadlines and one accepted answer submission per team per round.
+- Advisory timers; host closure stops submissions. One accepted submission per team per round.
+- Optional answers, immediate saved grading, numeric final proximity scoring, and a Christmas leaderboard.
 The remaining MVP notes below are historical context where they conflict with these updates.
 
 Purpose

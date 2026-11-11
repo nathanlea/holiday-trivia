@@ -1,15 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { GamemasterGameState, RoundStateView, SubmissionView } from '@shared/types';
 import ScoreboardTable from '../components/ScoreboardTable';
-import { adjustTeamScore, closeRound, createGame, fetchOpenGame, gradeSubmission, importQuestionSet, openRound, removeTeam, setJoiningOpen } from '../api';
+import { adjustTeamScore, closeRound, createGame, fetchOpenGame, importQuestionSet, openRound, removeTeam, setJoiningOpen } from '../api';
 import { useTriviaSocket } from '../hooks/useTriviaSocket';
 import { loadHostSession, persistHostSession, type HostSession } from '../hostSession';
 
 type GamemasterSession = HostSession;
-
-type SubmissionStatus = SubmissionView['answers'][number]['status'];
-
-type SubmissionDrafts = Record<string, Record<string, SubmissionStatus>>;
 
 interface TeamAdjustmentDraft {
     amount: string;
@@ -35,7 +31,6 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
     const [working, setWorking] = useState(false);
     const [creating, setCreating] = useState(false);
     const [importing, setImporting] = useState(false);
-    const [gradeDrafts, setGradeDrafts] = useState<SubmissionDrafts>({});
     const [createTitle, setCreateTitle] = useState('');
     const [createCode, setCreateCode] = useState('');
     const [importFile, setImportFile] = useState<File | null>(null);
@@ -122,7 +117,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
         const tiles = gmState.scoreboard.map((entry) => {
             const submission = submissionsByTeam.get(entry.teamId);
             const statuses = submission
-                ? submission.answers.map((answer) => gradeDrafts[submission.id]?.[answer.questionId] ?? answer.status)
+                ? submission.answers.map((answer) => answer.status)
                 : [];
 
             // For wager rounds, wagers are stored with the linkedRoundId (final round), not the wager round itself
@@ -153,7 +148,7 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
 
         submissionsForActiveRound.forEach((submission) => {
             if (!tiles.some((tile) => tile.teamId === submission.teamId)) {
-                const statuses = submission.answers.map((answer) => gradeDrafts[submission.id]?.[answer.questionId] ?? answer.status);
+                const statuses = submission.answers.map((answer) => answer.status);
                 const status: 'waiting' | 'in_review' | 'graded' = statuses.every((state) => state === 'correct' || state === 'incorrect')
                     ? 'graded'
                     : 'in_review';
@@ -169,13 +164,12 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
         });
 
         return tiles;
-    }, [gmState, submissionsByTeam, submissionsForActiveRound, gradeDrafts, activeRound, activeRoundId]);
+    }, [gmState, submissionsByTeam, submissionsForActiveRound, activeRound, activeRoundId]);
 
     const hasSubmissions = submissionsForActiveRound.length > 0;
 
     const clearSession = () => {
         setSession(null);
-        setGradeDrafts({});
         persistSession(null);
         setStatusMessage('Cleared gamemaster session.');
     };
@@ -262,24 +256,6 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
         }
         persistSession(session);
     }, [session]);
-
-    useEffect(() => {
-        if (!gmState) {
-            return;
-        }
-        setGradeDrafts((current) => {
-            const next: SubmissionDrafts = { ...current };
-            gmState.submissions.forEach((submission) => {
-                if (!next[submission.id]) {
-                    next[submission.id] = {};
-                }
-                submission.answers.forEach((answer) => {
-                    next[submission.id][answer.questionId] = answer.status;
-                });
-            });
-            return next;
-        });
-    }, [gmState]);
 
     useEffect(() => {
         if (!hasSubmissions) {
@@ -492,7 +468,6 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
         try {
             const payload: unknown = JSON.parse(await importFile.text());
             await importQuestionSet(session.gameCode, session.adminSecret, payload);
-            setGradeDrafts({});
             setImportFile(null);
             setStatusMessage('Question set imported. Ready to open the first round.');
         } catch (error) {
@@ -500,40 +475,6 @@ function GamemasterPage({ onConnectionStatusChange, onSessionChange }: Gamemaste
         } finally {
             setWorking(false);
             setImporting(false);
-        }
-    };
-
-    const handleGradeChange = (submissionId: string, questionId: string, status: SubmissionStatus) => {
-        setGradeDrafts((current) => ({
-            ...current,
-            [submissionId]: {
-                ...(current[submissionId] ?? {}),
-                [questionId]: status,
-            },
-        }));
-    };
-
-    const handleSubmitGrades = async (submission: SubmissionView) => {
-        if (!session) {
-            return;
-        }
-        const draft = gradeDrafts[submission.id];
-        if (!draft) {
-            setStatusMessage('No grades selected for this submission.');
-            return;
-        }
-
-        try {
-            setWorking(true);
-            await gradeSubmission(session.gameCode, session.adminSecret, submission.id, submission.answers.map((answer) => ({
-                questionId: answer.questionId,
-                status: draft[answer.questionId] ?? answer.status,
-            })));
-            setStatusMessage(`Grades submitted for ${submission.teamName}.`);
-        } catch (error) {
-            setStatusMessage(error instanceof Error ? error.message : 'Unable to submit grades.');
-        } finally {
-            setWorking(false);
         }
     };
 

@@ -404,9 +404,6 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
             setWorking(true);
             const answerPayload = currentRound.questions.map((question) => {
                 const draft = answers[question.id] ?? { response: '', pointValue: null };
-                if (!draft.response.trim()) {
-                    throw new Error('All answers must be filled in before submitting.');
-                }
                 return {
                     questionId: question.id,
                     response: draft.response.trim(),
@@ -595,8 +592,8 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
     const renderQuestionCard = (round: RoundStateView) => {
         const badgeLabel = round.isFinal ? 'Final Round' : `Round ${round.index + 1}`;
         const instructions = round.isFinal
-            ? 'Answer the final question. Your wager determines how many points you win or lose.'
-            : 'Assign each point value once across the questions before submitting.';
+            ? 'Your wager determines how many points you win or lose. A blank answer loses your wager.'
+            : 'Answers are optional; blanks earn zero. Assign each point value once, including to skipped questions.';
 
         return (
             <form className="panel team-card team-card--question" onSubmit={handleSubmitAnswers}>
@@ -641,25 +638,18 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
                                     </ul>
                                 )}
                                 <label className="field">
-                                    <span>Your Answer</span>
+                                    <span>Your Answer (optional)</span>
                                     {question.type === 'numeric' ? (
                                         <input
                                             type="text"
-                                            required
                                             value={draft.response}
-                                            onChange={(event) => {
-                                                const value = event.target.value;
-                                                // Allow only numbers and optional decimal point
-                                                if (value === '' || /^-?\d*\.?\d*$/.test(value)) {
-                                                    handleResponseChange(question.id, value);
-                                                }
-                                            }}
+                                            maxLength={2000}
+                                            onChange={(event) => handleResponseChange(question.id, event.target.value)}
                                             placeholder="Enter a number"
                                             inputMode="decimal"
                                         />
                                     ) : (
                                         <textarea
-                                            required
                                             maxLength={2000}
                                             value={draft.response}
                                             onChange={(event) => handleResponseChange(question.id, event.target.value)}
@@ -699,8 +689,8 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
                 {statusMessage && <p className="status">{statusMessage}</p>}
                 {socket.error && <p className="error">{socket.error}</p>}
                 <div className="form-actions">
-                    <button type="submit" className="primary" disabled={working || !socket.connected || displayTimeRemaining === 0}>
-                        {working ? 'Sending...' : displayTimeRemaining === 0 ? 'Time is up' : 'Submit Answers'}
+                    <button type="submit" className="primary" disabled={working || !socket.connected}>
+                        {working ? 'Sending...' : 'Submit Answers'}
                     </button>
                 </div>
             </form>
@@ -722,7 +712,7 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
                 </div>
             </header>
             <p className="panel-subhead">
-                Lock in your wager for {round.linkedRoundLabel ?? 'the final round'} before time expires.
+                Lock in your wager for {round.linkedRoundLabel ?? 'the final round'} before the host closes wagering.
             </p>
             <form onSubmit={handleSubmitWager} className="wager-form wager-form--standalone">
                 <label className="field">
@@ -738,8 +728,8 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
                     />
                 </label>
                 <div className="form-actions">
-                    <button type="submit" className="primary" disabled={working || !socket.connected || displayTimeRemaining === 0}>
-                        {working ? 'Sending...' : displayTimeRemaining === 0 ? 'Time is up' : 'Submit Wager'}
+                    <button type="submit" className="primary" disabled={working || !socket.connected}>
+                        {working ? 'Sending...' : 'Submit Wager'}
                     </button>
                 </div>
             </form>
@@ -749,8 +739,19 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
     );
 
     return (
-        <div className="page team-page">
+        <div className={`page team-page${roundIsOpen && displayTimeRemaining != null ? ' team-page--timed' : ''}`}>
             <h2>{session ? 'Your team' : 'Let the holiday trivia begin'}</h2>
+            {session && roundIsOpen && displayTimeRemaining != null && (
+                <aside className={`floating-timer${displayTimeRemaining === 0 ? ' floating-timer--expired' : ''}`} aria-label="Round timer">
+                    <span className="floating-timer-clock" role="timer" aria-live="off">
+                        {Math.floor(displayTimeRemaining / 60)}:{String(displayTimeRemaining % 60).padStart(2, '0')}
+                    </span>
+                    <div>
+                        <strong role="status">{displayTimeRemaining === 0 ? 'Time is up - still open' : 'Time remaining'}</strong>
+                        <span>Submit until the host closes the round</span>
+                    </div>
+                </aside>
+            )}
             {session && !socket.connected && (
                 <p className="info-banner" role="status">{socket.error ?? 'Reconnecting... Your answer drafts stay on this device.'}</p>
             )}

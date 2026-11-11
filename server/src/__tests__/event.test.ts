@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { AddressInfo } from 'net';
 import type { HelloPayload, ServerToClientMessage } from '../../../shared/types';
 import { createApp } from '../app';
-import { Game, initializeDatabase, Question, Round, sequelize, Submission, Team } from '../db';
+import { Game, initializeDatabase, Question, Round, sequelize, Submission, SubmissionResult, Team } from '../db';
 import GameManager from '../gameManager';
 import { setupWebsocket } from '../ws';
 
@@ -139,7 +139,7 @@ describe('Public event workflow', () => {
         }
     });
 
-    it('enforces deadlines for answers and wagers on the server', async () => {
+    it('accepts answers and wagers after timer expiry but not after host closure', async () => {
         const { game, round, question } = await preparedGame();
         const team = await manager.joinTeam(game.code, 'Team');
         await manager.openRound(game.code, secret, round.id);
@@ -147,12 +147,139 @@ describe('Public event workflow', () => {
         const response = await api(`/games/${game.code}/answers`, {
             ...team, roundId: round.id, answers: [{ questionId: question.id, response: '0', pointValue: 10 }],
         });
-        expect(response.status).toBe(409);
+        expect(response.status).toBe(202);
         await manager.closeRound(game.code, secret, round.id);
+        await expect(manager.submitAnswers(game.code, team.teamId, team.teamToken, round.id, [
+            { questionId: question.id, response: '', pointValue: 10 },
+        ])).rejects.toThrow('not accepting submissions');
         const wager = await Round.findOne({ where: { gameId: game.id, mode: 'wager' } });
         await manager.openRound(game.code, secret, wager!.id);
         await wager!.update({ openedAt: new Date(Date.now() - 120_000).toISOString() });
-        await expect(manager.submitWager(game.code, team.teamId, team.teamToken, wager!.id, 0)).rejects.toThrow('Time is up');
+        await manager.submitWager(game.code, team.teamId, team.teamToken, wager!.id, 0);
+        await manager.closeRound(game.code, secret, wager!.id);
+        await expect(manager.submitWager(game.code, team.teamId, team.teamToken, wager!.id, 0)).rejects.toThrow('must be open');
+    });
+
+    it('does not interpret a blank numeric answer as zero or award points for it', async () => {
+        const { game, round, question } = await preparedGame();
+        const team = await manager.joinTeam(game.code, 'Skipping');
+        await manager.openRound(game.code, secret, round.id);
+        await manager.submitAnswers(game.code, team.teamId, team.teamToken, round.id, [
+            { questionId: question.id, response: '   ', pointValue: 10 },
+        ]);
+        expect((await Team.findByPk(team.teamId))?.score).toBe(0);
+        expect((await SubmissionResult.findOne())?.status).toBe('incorrect');
+        expect((await Submission.findOne())?.status).toBe('graded');
+    });
+
+    it('accepts blank text answers and saves individual grades as replaceable score deltas', async () => {
+        const game = await manager.createGame('Instant grading', secret);
+        await manager.importGameData(game.code, secret, { rounds: [{
+            pointOptions: [3, 5], questions: [
+                { type: 'open', text: 'Skip me', answer: 'Anything' },
+                { type: 'open', text: 'Country?', answer: 'Norway' },
+            ],
+        }] });
+        const team = await manager.joinTeam(game.code, 'Review me');
+        const round = (await Round.findOne({ where: { gameId: game.id } }))!;
+        const entries = await Question.findAll({ where: { roundId: round.id }, order: [['questionIndex', 'ASC']] });
+        await manager.openRound(game.code, secret, round.id);
+        await manager.submitAnswers(game.code, team.teamId, team.teamToken, round.id, [
+            { questionId: entries[0].id, response: '', pointValue: 3 },
+            { questionId: entries[1].id, response: 'Norway', pointValue: 5 },
+        ]);
+        const submission = (await Submission.findOne())!;
+        const blank = (await SubmissionResult.findOne({ where: { questionId: entries[0].id } }))!;
+        expect(blank.status).toBe('incorrect');
+        expect(blank.awardedPoints).toBe(0);
+
+        for (const [status, awardedPoints, score, submissionStatus] of [
+            ['correct', 5, 5, 'graded'],
+            ['correct', 3, 3, 'graded'],
+            ['correct', 3, 3, 'graded'],
+            ['pending', 0, 0, 'submitted'],
+            ['correct', 5, 5, 'graded'],
+        ] as const) {
+            const response = await api(`/games/${game.code}/submissions/${submission.id}/grade`, {
+                grades: [{ questionId: entries[1].id, status, awardedPoints }],
+            }, secret);
+            expect(response.status).toBe(204);
+            expect((await Team.findByPk(team.teamId))?.score).toBe(score);
+            expect((await Submission.findByPk(submission.id))?.status).toBe(submissionStatus);
+        }
+    });
+
+    it('loses the wager for a blank manually graded final without waiting for a host grade', async () => {
+        const { game, round, question } = await preparedGame();
+        const team = await manager.joinTeam(game.code, 'Blank final');
+        await manager.openRound(game.code, secret, round.id);
+        await manager.submitAnswers(game.code, team.teamId, team.teamToken, round.id, [
+            { questionId: question.id, response: '0', pointValue: 10 },
+        ]);
+        await manager.closeRound(game.code, secret, round.id);
+        const wager = (await Round.findOne({ where: { gameId: game.id, mode: 'wager' } }))!;
+        const final = (await Round.findOne({ where: { gameId: game.id, mode: 'final' } }))!;
+        const finalQuestion = (await Question.findOne({ where: { roundId: final.id } }))!;
+        await manager.openRound(game.code, secret, wager.id);
+        await manager.submitWager(game.code, team.teamId, team.teamToken, wager.id, 5);
+        await manager.closeRound(game.code, secret, wager.id);
+        await manager.openRound(game.code, secret, final.id);
+        await manager.submitAnswers(game.code, team.teamId, team.teamToken, final.id, [
+            { questionId: finalQuestion.id, response: '', pointValue: null },
+        ]);
+        expect((await Team.findByPk(team.teamId))?.score).toBe(5);
+        expect((await Submission.findOne({ where: { roundId: final.id } }))?.status).toBe('graded');
+    });
+
+    it('auto-grades the actual question-file final at all agreed boundaries and supports overrides', async () => {
+        const payload: unknown = JSON.parse(fs.readFileSync(path.resolve('..', 'questions.json'), 'utf8'));
+        const game = await manager.createGame('Real final', secret);
+        await manager.importGameData(game.code, secret, payload);
+        const wager = (await Round.findOne({ where: { gameId: game.id, mode: 'wager' } }))!;
+        const final = (await Round.findOne({ where: { gameId: game.id, mode: 'final' } }))!;
+        const question = (await Question.findOne({ where: { roundId: final.id } }))!;
+        expect(question.type).toBe('numeric');
+        const cases = [
+            ['39,006', 20], ['40956.3', 20], ['37055.7', 20],
+            ['40956.31', 10], ['42906.6', 10], ['35105.4', 10],
+            ['42906.61', 0], ['46807.2', 0], ['31204.8', 0],
+            ['46807.21', -20], ['', -20],
+        ] as const;
+        const teams = await Promise.all(cases.map(([answer]) => manager.joinTeam(game.code, `Guess ${answer || 'blank'}`)));
+        await manager.openRound(game.code, secret, wager.id);
+        for (const team of teams) {
+            await manager.adjustTeamScore(game.code, secret, team.teamId, 100);
+            await manager.submitWager(game.code, team.teamId, team.teamToken, wager.id, 20);
+        }
+        await manager.closeRound(game.code, secret, wager.id);
+        await manager.openRound(game.code, secret, final.id);
+        for (const [index, [response, expected]] of cases.entries()) {
+            const team = teams[index];
+            await manager.submitAnswers(game.code, team.teamId, team.teamToken, final.id, [
+                { questionId: question.id, response, pointValue: null },
+            ]);
+            expect((await Team.findByPk(team.teamId))?.score, response).toBe(100 + expected);
+        }
+        const team = teams[3];
+        const submission = (await Submission.findOne({ where: { teamId: team.teamId } }))!;
+        for (const [status, awardedPoints, expectedScore] of [
+            ['correct', 20, 120], ['correct', 20, 120],
+            ['incorrect', -20, 80], ['pending', 0, 100], ['incorrect', 0, 100],
+        ] as const) {
+            await manager.gradeSubmission(game.code, secret, submission.id, [{ questionId: question.id, status, awardedPoints }]);
+            expect((await Team.findByPk(team.teamId))?.score).toBe(expectedScore);
+        }
+    });
+
+    it.each([NaN, Infinity, -Infinity])('rejects a non-finite numeric answer key (%s) during import', async (correctAnswer) => {
+        const game = await manager.createGame('Invalid numeric configuration', secret);
+        await expect(manager.importGameData(game.code, secret, {
+            rounds: [{ pointOptions: [10], questions: [{
+                type: 'numeric', text: 'Estimate', numericConfig: {
+                    correctAnswer, ranges: [{ maxPercentOff: 5, pointsPercent: 100 }],
+                },
+            }] }],
+        })).rejects.toThrow('must be a finite number');
     });
 
     it('scores zero numeric answers and prevents repeat submissions changing scores', async () => {
@@ -229,7 +356,7 @@ describe('Public event workflow', () => {
         expect((await Team.findByPk(team.teamId))?.score).toBe(10);
     });
 
-    it.each(['questions_sample.json', 'questiosn.json'])('keeps the existing %s import format', async (filename) => {
+    it.each(['questions_sample.json', 'questions.json'])('keeps the existing %s import format', async (filename) => {
         const game = await manager.createGame('Import check', secret);
         const payload: unknown = JSON.parse(fs.readFileSync(path.resolve('..', filename), 'utf8'));
         await manager.importGameData(game.code, secret, payload);
