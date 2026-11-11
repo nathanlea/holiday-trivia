@@ -2283,24 +2283,311 @@ button:disabled {
 /* Gamemaster Submissions Page */
 .gamemaster-submissions-page {
     max-width: none;
+    width: 100%;
+    gap: 0.75rem;
+}
+
+.gamemaster-submissions-page .page-header {
+    align-items: center;
+    gap: 1rem;
+    margin: 0;
+    padding: 0 0 0.75rem;
+}
+
+.gamemaster-submissions-page h2 {
+    font-size: 1.6rem;
+}
+
+.gamemaster-submissions-page .page-subhead {
+    margin-top: 0.15rem;
+}
+
+.grading-toolbar,
+.grading-progress,
+.grading-feedback {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.grading-toolbar {
+    justify-content: space-between;
+}
+
+.grading-progress {
+    flex-wrap: wrap;
+    gap: 0.35rem 1rem;
+    font-size: 0.9rem;
+    color: var(--holiday-muted-on-dark);
+}
+
+.grading-progress strong {
+    color: var(--holiday-gold-light);
+}
+
+.grading-feedback {
+    min-height: 44px;
+    padding: 0.45rem 0.75rem;
+    border-radius: 8px;
+    background: var(--holiday-green-light);
+    color: var(--holiday-cream);
+    font-size: 0.85rem;
+}
+
+.grading-feedback > span {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.grading-feedback[data-kind='success'] {
+    background: var(--holiday-success-bg);
+    color: var(--holiday-green);
+}
+
+.grading-feedback[data-kind='error'] {
+    background: var(--holiday-danger-bg);
+    color: var(--holiday-danger-ink);
+}
+
+.grading-feedback button {
+    flex: 0 0 28px;
+    min-height: 28px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    color: inherit;
+    font-size: 1.2rem;
+    box-shadow: none;
 }
 
 .gamemaster-submissions-page .submission-layout {
+    grid-template-columns: 250px minmax(0, 1fr);
+    gap: 1rem;
+    min-height: 0;
+    align-items: stretch;
+}
+
+.grading-queue {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    gap: 0.75rem;
+}
+
+.grading-queue-filter {
     display: grid;
-    grid-template-columns: 350px minmax(0, 1fr);
-    gap: 2rem;
-    align-items: start;
+    gap: 0.35rem;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.grading-queue-filter select {
+    width: 100%;
 }
 
 .gamemaster-submissions-page .submission-grid {
-    position: sticky;
-    top: 6rem;
-    max-height: calc(100vh - 8rem);
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: max-content;
+    align-content: start;
+    gap: 0.5rem;
+    padding: 4px;
     overflow-y: auto;
 }
 
+.gamemaster-submissions-page .submission-tile {
+    gap: 0.3rem;
+    padding: 0.65rem 0.8rem;
+    border-radius: 10px;
+    box-shadow: none;
+    transform: none;
+}
+
+.gamemaster-submissions-page .submission-tile.active {
+    box-shadow: inset 4px 0 var(--holiday-gold);
+}
+
+.gamemaster-submissions-page .submission-tile-meta {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: space-between;
+}
+
+.gamemaster-submissions-page .submission-status {
+    justify-self: start;
+    padding: 0.1rem 0.5rem;
+    letter-spacing: 0.03em;
+}
+
 .gamemaster-submissions-page .submission-detail {
-    min-height: 400px;
+    min-height: 0;
+    min-width: 0;
+}
+
+.gamemaster-submissions-page .submission-detail-card {
+    min-height: 0;
+    padding: 1rem;
+    gap: 0.75rem;
+    overflow: hidden;
+}
+
+.gamemaster-submissions-page .submission-detail-header {
+    flex: 0 0 auto;
+}
+
+.gamemaster-submissions-page .submission-detail-header h4 {
+    overflow-wrap: anywhere;
+}
+
+.gamemaster-submissions-page .submission-answers {
+    min-height: 0;
+    max-height: none;
+    align-content: start;
+    padding: 4px;
+    scrollbar-gutter: stable;
+}
+
+.gamemaster-submissions-page .submission-answer {
+    grid-template-columns: minmax(0, 1fr) 260px;
+    align-items: start;
+    gap: 1rem;
+    padding: 0.9rem;
+}
+
+.submission-answer-content {
+    display: grid;
+    min-width: 0;
+    gap: 0.75rem;
+    overflow-wrap: anywhere;
+}
+
+.gamemaster-submissions-page .submission-answer-header {
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.gamemaster-submissions-page .submission-answer-meta {
+    justify-content: flex-start;
+}
+
+.grading-response-label,
+.grading-controls-hint {
+    font-size: 0.8rem;
+    color: var(--holiday-muted);
+}
+
+.grading-response-label {
+    display: block;
+    margin-bottom: 0.25rem;
+    font-weight: 600;
+}
+
+.gamemaster-submissions-page .submission-answer-text {
+    font-size: 1.15rem;
+    font-weight: 600;
+    white-space: pre-wrap;
+}
+
+.gamemaster-submissions-page .grade-controls {
+    padding-left: 1rem;
+    border-left: 1px solid var(--holiday-border);
+}
+
+.gamemaster-submissions-page .grade-controls legend {
+    padding: 0;
+    font-weight: 700;
+    font-size: 0.9rem;
+}
+
+.grading-controls-hint {
+    margin: 0.25rem 0 0.65rem;
+}
+
+.gamemaster-submissions-page .grade-toggle {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+}
+
+.gamemaster-submissions-page .grade-button {
+    padding: 0.5rem;
+    box-shadow: none;
+    transform: none;
+}
+
+.gamemaster-submissions-page .partial-credit-controls {
+    padding: 0.6rem;
+}
+
+.gamemaster-submissions-page .partial-credit-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+}
+
+.gamemaster-submissions-page .partial-credit-buttons > :last-child {
+    grid-column: 1 / -1;
+}
+
+@media (min-width: 900px) {
+    .app-shell:has(.gamemaster-submissions-page) {
+        height: 100dvh;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .app-shell:has(.gamemaster-submissions-page) .app-header {
+        padding: 0.75rem 2vw;
+        flex-shrink: 0;
+    }
+
+    .app-shell:has(.gamemaster-submissions-page) .app-main {
+        display: flex;
+        min-height: 0;
+        padding: 1rem 2vw;
+    }
+
+    .app-shell:has(.gamemaster-submissions-page) .app-footer {
+        flex-shrink: 0;
+        padding: 0.15rem 1rem;
+        font-size: 0.8rem;
+    }
+
+    .app-shell:has(.gamemaster-submissions-page) .app-footer a {
+        min-height: 28px;
+    }
+
+    .gamemaster-submissions-page {
+        display: grid;
+        grid-template-rows: auto auto 44px minmax(0, 1fr);
+    }
+
+    .gamemaster-submissions-page .grading-feedback > span {
+        max-height: 100%;
+        overflow-y: auto;
+    }
+}
+
+@media (max-width: 899px) {
+    .gamemaster-submissions-page .submission-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .gamemaster-submissions-page .submission-grid {
+        max-height: 220px;
+    }
+
+    .gamemaster-submissions-page .submission-answer {
+        grid-template-columns: 1fr;
+    }
+
+    .gamemaster-submissions-page .grade-controls {
+        border-left: 0;
+        padding-left: 0;
+    }
+
+    .grading-toolbar {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
 }
 
 /* Gamemaster Teams Page */
@@ -2391,16 +2678,6 @@ button:disabled {
 }
 
 @media (max-width: 1024px) {
-    .gamemaster-submissions-page .submission-layout {
-        grid-template-columns: 1fr;
-    }
-
-    .gamemaster-submissions-page .submission-grid {
-        position: static;
-        max-height: none;
-        overflow-y: visible;
-    }
-
     .team-management-adjust {
         grid-template-columns: 1fr;
     }

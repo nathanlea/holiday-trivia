@@ -24,6 +24,9 @@ and a projector scoreboard.
   answers remain visible, as before. Every host grading action saves immediately,
   updating totals by the difference from the previous grade. Save failures are shown
   explicitly and can be retried.
+- The laptop grading workspace keeps a filterable team queue beside the answers,
+  with pending teams first, round progress, and a next-team shortcut. Grade controls
+  sit beside each answer; save feedback never shifts the workspace or resets its scroll.
 - The final in `questions.json` is numeric and automatically graded. The host sees
   the expected answer, absolute/percentage difference, automatic score, and any
   manual override. Text answers remain manually graded.

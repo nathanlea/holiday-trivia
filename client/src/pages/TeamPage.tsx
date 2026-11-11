@@ -526,7 +526,7 @@ function TeamPage({ onConnectionStatusChange, onSessionChange }: TeamPageProps):
                     <input
                         value={teamNameInput}
                         onChange={(event) => setTeamNameInput(event.target.value)}
-                        placeholder="Trivia Titans"
+                        placeholder="Team #30"
                         minLength={2}
                         maxLength={40}
                         required

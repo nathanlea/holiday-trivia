@@ -7,6 +7,7 @@ import { loadHostSession } from '../hostSession';
 import NumericGradeComparison from '../components/NumericGradeComparison';
 
 type SubmissionStatus = SubmissionView['answers'][number]['status'];
+type QueueFilter = 'all' | 'in_review' | 'graded' | 'waiting';
 
 function GamemasterSubmissionsPage(): JSX.Element {
     const [searchParams] = useSearchParams();
@@ -18,7 +19,9 @@ function GamemasterSubmissionsPage(): JSX.Element {
     const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
     const [working, setWorking] = useState(false);
     const savingRef = useRef(false);
-    const [statusMessage, setStatusMessage] = useState<string | null>(null);
+    const queueRef = useRef<HTMLDivElement>(null);
+    const [feedback, setFeedback] = useState<{ message: string; kind: 'info' | 'success' | 'error' } | null>(null);
+    const [queueFilter, setQueueFilter] = useState<QueueFilter>('all');
 
     const socket = useTriviaSocket(
         gameCode && pin
@@ -125,6 +128,19 @@ function GamemasterSubmissionsPage(): JSX.Element {
         return tiles;
     }, [gmState, submissionsByTeam, submissionsForActiveRound]);
 
+    const reviewQueue = teamTiles.filter((tile) => tile.status === 'in_review');
+    const gradedCount = teamTiles.filter((tile) => tile.status === 'graded').length;
+    const waitingCount = teamTiles.length - reviewQueue.length - gradedCount;
+    const visibleTiles = teamTiles
+        .filter((tile) => queueFilter === 'all' || tile.status === queueFilter)
+        .sort((a, b) => {
+            const priority = { in_review: 0, graded: 1, waiting: 2 };
+            return priority[a.status] - priority[b.status];
+        });
+    const selectedQueueIndex = reviewQueue.findIndex((tile) => tile.teamId === selectedTeamId);
+    const nextReviewTeam = reviewQueue.slice(selectedQueueIndex + 1).find((tile) => tile.teamId !== selectedTeamId)
+        ?? reviewQueue.find((tile) => tile.teamId !== selectedTeamId);
+
     useEffect(() => {
         if (!gmState) {
             if (selectedTeamId !== null) {
@@ -146,16 +162,31 @@ function GamemasterSubmissionsPage(): JSX.Element {
         }
     }, [gmState, teamTiles, selectedTeamId]);
 
+    useEffect(() => {
+        const queue = queueRef.current;
+        const selected = queue?.querySelector<HTMLButtonElement>('[aria-pressed="true"]');
+        if (!queue || !selected) {
+            return;
+        }
+        const queueBounds = queue.getBoundingClientRect();
+        const selectedBounds = selected.getBoundingClientRect();
+        if (selectedBounds.top < queueBounds.top) {
+            queue.scrollTop += selectedBounds.top - queueBounds.top - 4;
+        } else if (selectedBounds.bottom > queueBounds.bottom) {
+            queue.scrollTop += selectedBounds.bottom - queueBounds.bottom + 4;
+        }
+    }, [selectedTeamId, queueFilter]);
+
     const handleGradeChange = async (submissionId: string, questionId: string, status: SubmissionStatus, awardedPoints?: number) => {
         if (savingRef.current) {
-            setStatusMessage('Please wait for the current grade to finish saving.');
+            setFeedback({ message: 'Please wait for the current grade to finish saving.', kind: 'info' });
             return;
         }
         const submission = gmState?.submissions.find((entry) => entry.id === submissionId);
         const answer = submission?.answers.find((entry) => entry.questionId === questionId);
         const round = gmState?.rounds.find((entry) => entry.id === submission?.roundId);
         if (!gameCode || !pin || !submission || !answer || !round) {
-            setStatusMessage('Unable to find this submission. Reconnect before grading.');
+            setFeedback({ message: 'Unable to find this submission. Reconnect before grading.', kind: 'error' });
             return;
         }
         const fullPoints = round.isFinal ? submission.wagerAmount ?? 0 : answer.pointValue ?? 0;
@@ -164,13 +195,13 @@ function GamemasterSubmissionsPage(): JSX.Element {
         savingRef.current = true;
         try {
             setWorking(true);
-            setStatusMessage(`Saving grade for ${submission.teamName}...`);
+            setFeedback({ message: `Saving grade for ${submission.teamName}...`, kind: 'info' });
             await gradeSubmission(gameCode, pin, submissionId, [{
                 questionId, status, awardedPoints: awardedPoints ?? defaultPoints,
             }]);
-            setStatusMessage(`Grade saved for ${submission.teamName}. Total updated.`);
+            setFeedback({ message: `Grade saved for ${submission.teamName}. Total updated.`, kind: 'success' });
         } catch (error) {
-            setStatusMessage(`Grade not saved. ${error instanceof Error ? error.message : 'Unable to save grade.'} Please retry.`);
+            setFeedback({ message: `Grade not saved. ${error instanceof Error ? error.message : 'Unable to save grade.'} Please retry.`, kind: 'error' });
         } finally {
             savingRef.current = false;
             setWorking(false);
@@ -202,57 +233,98 @@ function GamemasterSubmissionsPage(): JSX.Element {
         <div className="page gamemaster-submissions-page">
             <div className="page-header">
                 <div>
-                    <h2>Manage Submissions{activeRound ? ` – ${activeRound.label}` : ''}</h2>
-                    <p className="page-subhead">Each grading action saves immediately and updates the total. Change a grade any time.</p>
+                    <h2>Manage Submissions</h2>
+                    <p className="page-subhead">{activeRound?.label ?? 'Waiting for a round'} · Game {gameCode} · Grades save immediately</p>
                 </div>
                 <button type="button" className="ghost-button" onClick={() => navigate('/gamemaster')}>
                     ← Back to Console
                 </button>
             </div>
 
-            {statusMessage && (
-                <div className="status-banner" role="status">
-                    {statusMessage}
-                    <button type="button" onClick={() => setStatusMessage(null)}>×</button>
+            <div className="grading-toolbar">
+                <div className="grading-progress" aria-label="Round grading progress">
+                    <strong>{reviewQueue.length} needs review</strong>
+                    <span>{gradedCount} graded / {teamTiles.length} teams</span>
+                    <span>{waitingCount} waiting</span>
                 </div>
-            )}
+                <button
+                    type="button"
+                    disabled={working || !nextReviewTeam}
+                    onClick={() => {
+                        if (nextReviewTeam) {
+                            setQueueFilter('all');
+                            setSelectedTeamId(nextReviewTeam.teamId);
+                        }
+                    }}
+                >
+                    Next team to review →
+                </button>
+            </div>
 
-            {!socket.connected && <p className="error">Not connected to server</p>}
-            {socket.error && <p className="error">{socket.error}</p>}
+            <div
+                className="grading-feedback"
+                data-kind={socket.error || !socket.connected ? 'error' : feedback?.kind ?? 'info'}
+            >
+                <span role={feedback?.kind === 'error' || socket.error ? 'alert' : 'status'}>
+                    {socket.error ?? (!socket.connected
+                        ? 'Reconnecting... Grading is paused until the connection returns.'
+                        : feedback?.message ?? 'Ready to grade. Select a team, review the answer, then choose a grade.')}
+                </span>
+                {feedback && socket.connected && !socket.error && (
+                    <button type="button" aria-label="Dismiss grading message" onClick={() => setFeedback(null)}>×</button>
+                )}
+            </div>
 
             {gmState ? (
                 teamTiles.length ? (
                     <div className="submission-layout">
-                        <div className="submission-grid" role="list">
-                            {teamTiles.map((tile) => {
-                                const statusLabel = tile.status === 'graded'
-                                    ? 'Graded'
-                                    : tile.status === 'in_review'
-                                        ? 'Needs review'
-                                        : 'Waiting';
-                                const submittedAtLabel = tile.submittedAt
-                                    ? new Date(tile.submittedAt).toLocaleTimeString()
-                                    : null;
-                                return (
-                                    <button
-                                        key={tile.teamId}
-                                        type="button"
-                                        role="listitem"
-                                        className={`submission-tile submission-tile--${tile.status}${selectedTeamId === tile.teamId ? ' active' : ''}`}
-                                        onClick={() => setSelectedTeamId(tile.teamId)}
-                                    >
-                                        <span className="submission-tile-name">{tile.name}</span>
-                                        <div className="submission-tile-meta">
-                                            <span className="submission-tile-score">Score {tile.score}</span>
-                                            {submittedAtLabel && <span className="submission-tile-time">Submitted {submittedAtLabel}</span>}
-                                        </div>
-                                        <span className={`submission-status submission-status--${tile.status}`}>
-                                            {statusLabel}
-                                        </span>
-                                    </button>
-                                );
-                            })}
-                        </div>
+                        <aside className="grading-queue" aria-label="Team submissions">
+                            <label className="grading-queue-filter">
+                                <span>Team queue</span>
+                                <select value={queueFilter} onChange={(event) => {
+                                    const value = event.target.value;
+                                    if (value === 'all' || value === 'in_review' || value === 'graded' || value === 'waiting') {
+                                        setQueueFilter(value);
+                                    }
+                                }}>
+                                    <option value="all">All teams ({teamTiles.length})</option>
+                                    <option value="in_review">Needs review ({reviewQueue.length})</option>
+                                    <option value="graded">Graded ({gradedCount})</option>
+                                    <option value="waiting">Waiting ({waitingCount})</option>
+                                </select>
+                            </label>
+                            <div className="submission-grid" ref={queueRef}>
+                                {visibleTiles.map((tile) => {
+                                    const statusLabel = tile.status === 'graded'
+                                        ? 'Graded'
+                                        : tile.status === 'in_review'
+                                            ? 'Needs review'
+                                            : 'Waiting';
+                                    const submittedAtLabel = tile.submittedAt
+                                        ? new Date(tile.submittedAt).toLocaleTimeString()
+                                        : null;
+                                    return (
+                                        <button
+                                            key={tile.teamId}
+                                            type="button"
+                                            aria-pressed={selectedTeamId === tile.teamId}
+                                            className={`submission-tile submission-tile--${tile.status}${selectedTeamId === tile.teamId ? ' active' : ''}`}
+                                            onClick={() => setSelectedTeamId(tile.teamId)}
+                                        >
+                                            <span className="submission-tile-name">{tile.name}</span>
+                                            <div className="submission-tile-meta">
+                                                <span className="submission-tile-score">Score {tile.score}</span>
+                                                {submittedAtLabel && <span className="submission-tile-time">{submittedAtLabel}</span>}
+                                            </div>
+                                            <span className={`submission-status submission-status--${tile.status}`}>
+                                                {statusLabel}
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                                {!visibleTiles.length && <p className="empty-state">No teams in this view.</p>}
+                            </div>
+                        </aside>
                         <div className="submission-detail">
                             {selectedTeamId ? (
                                 selectedSubmission ? (
@@ -276,7 +348,7 @@ function GamemasterSubmissionsPage(): JSX.Element {
                                                 )}
                                             </div>
                                         </header>
-                                        <div className="submission-answers">
+                                        <div className="submission-answers" key={`${activeRoundId}:${selectedTeamId}`} tabIndex={0} aria-label="Answers to grade">
                                             {selectedSubmission.answers.map((answer) => {
                                                 const draftStatus = answer.status;
                                                 const question = selectedRound?.questions.find((entry) => entry.id === answer.questionId);
@@ -285,50 +357,56 @@ function GamemasterSubmissionsPage(): JSX.Element {
                                                     ? selectedSubmission.wagerAmount ?? 0 : answer.pointValue ?? 0;
                                                 return (
                                                     <article key={answer.questionId} className="submission-answer">
-                                                        <header className="submission-answer-header">
+                                                        <div className="submission-answer-content">
+                                                            <header className="submission-answer-header">
+                                                                <div>
+                                                                    <span className="submission-answer-number">
+                                                                        {question ? `Q${question.order + 1}` : 'Question'}
+                                                                    </span>
+                                                                    <h5>{question?.text ?? 'Question prompt unavailable'}</h5>
+                                                                </div>
+                                                                <div className="submission-answer-meta">
+                                                                    {answer.pointValue != null && !selectedRound?.isFinal && (
+                                                                        <span>Value {answer.pointValue}</span>
+                                                                    )}
+                                                                    <span>Awarded {answer.awardedPoints} pts</span>
+                                                                    <span className={`submission-answer-status submission-answer-status--${draftStatus}`}>
+                                                                        {draftStatus === 'correct'
+                                                                            ? 'Marked correct'
+                                                                            : draftStatus === 'incorrect'
+                                                                                ? 'Marked incorrect'
+                                                                                : 'Awaiting decision'}
+                                                                    </span>
+                                                                </div>
+                                                            </header>
                                                             <div>
-                                                                <span className="submission-answer-number">
-                                                                    {question ? `Q${question.order + 1}` : 'Question'}
-                                                                </span>
-                                                                <h5>{question?.text ?? 'Question prompt unavailable'}</h5>
+                                                                <span className="grading-response-label">Team answer</span>
+                                                                <p className="submission-answer-text">{answer.response || '—'}</p>
                                                             </div>
-                                                            <div className="submission-answer-meta">
-                                                                {answer.pointValue != null && !selectedRound?.isFinal && (
-                                                                    <span>Value {answer.pointValue}</span>
-                                                                )}
-                                                                <span>Awarded {answer.awardedPoints} pts</span>
-                                                                <span className={`submission-answer-status submission-answer-status--${draftStatus}`}>
-                                                                    {draftStatus === 'correct'
-                                                                        ? 'Marked correct'
-                                                                        : draftStatus === 'incorrect'
-                                                                            ? 'Marked incorrect'
-                                                                            : 'Awaiting decision'}
-                                                                </span>
-                                                            </div>
-                                                        </header>
-                                                        {hasChoices && (
-                                                            <ul className="submission-answer-choices">
-                                                                {question?.choices?.map((choice, index) => (
-                                                                    <li key={index}>{choice}{question?.correctChoiceIndices?.includes(index) ? ' (correct)' : ''}</li>
-                                                                ))}
-                                                            </ul>
-                                                        )}
-                                                        <p className="submission-answer-text">{answer.response || '—'}</p>
-                                                        {question?.correctAnswerText && !question.numericConfig && (
-                                                            <p className="submission-answer-hint">Correct answer: {question.correctAnswerText}</p>
-                                                        )}
-                                                        {question?.numericConfig && (
-                                                            <NumericGradeComparison
-                                                                response={answer.response}
-                                                                config={question.numericConfig}
-                                                                assignedPoints={fullPoints}
-                                                                isFinal={Boolean(selectedRound?.isFinal)}
-                                                                awardedPoints={answer.awardedPoints}
-                                                                status={answer.status}
-                                                            />
-                                                        )}
+                                                            {question?.correctAnswerText && !question.numericConfig && (
+                                                                <p className="submission-answer-hint">Correct answer: {question.correctAnswerText}</p>
+                                                            )}
+                                                            {hasChoices && (
+                                                                <ul className="submission-answer-choices">
+                                                                    {question?.choices?.map((choice, index) => (
+                                                                        <li key={index}>{choice}{question?.correctChoiceIndices?.includes(index) ? ' (correct)' : ''}</li>
+                                                                    ))}
+                                                                </ul>
+                                                            )}
+                                                            {question?.numericConfig && (
+                                                                <NumericGradeComparison
+                                                                    response={answer.response}
+                                                                    config={question.numericConfig}
+                                                                    assignedPoints={fullPoints}
+                                                                    isFinal={Boolean(selectedRound?.isFinal)}
+                                                                    awardedPoints={answer.awardedPoints}
+                                                                    status={answer.status}
+                                                                />
+                                                            )}
+                                                        </div>
                                                         <fieldset className="grade-controls" disabled={working || !socket.connected}>
-                                                            <legend className="sr-only">Grade this answer (saves immediately)</legend>
+                                                            <legend>Grade this answer</legend>
+                                                            <p className="grading-controls-hint">Saves immediately</p>
                                                             <div
                                                                 className="grade-toggle"
                                                                 role="group"
@@ -444,9 +522,6 @@ function GamemasterSubmissionsPage(): JSX.Element {
                                                     </article>
                                                 );
                                             })}
-                                        </div>
-                                        <div className="form-actions submission-detail-actions">
-                                            <span role="status">{working ? 'Saving grade...' : 'Grades save automatically.'}</span>
                                         </div>
                                     </div>
                                 ) : (

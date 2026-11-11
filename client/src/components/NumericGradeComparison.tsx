@@ -35,7 +35,7 @@ function NumericGradeComparison(props: NumericGradeComparisonProps): JSX.Element
             </p>
             <p>Automatic score: {points(suggested.awardedPoints)} · Saved score: {status === 'pending' ? 'Not graded' : points(awardedPoints)}</p>
             {overridden && <p className="numeric-grade-override">Host override applied.</p>}
-            <small>Host controls below can override the automatic score.</small>
+            <small>Host grading controls can override the automatic score.</small>
         </div>
     );
 }
