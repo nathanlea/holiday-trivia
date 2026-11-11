@@ -12,7 +12,7 @@ function LandingPage(): JSX.Element {
             </section>
 
             <section className="role-grid">
-                <article className="role-card">
+                <article className="panel role-card">
                     <h3>Team</h3>
                     <p>Join a game, claim your team name, submit answers, and lock in wagers during the final round.</p>
                     <Link className="primary" to="/team">
@@ -20,7 +20,7 @@ function LandingPage(): JSX.Element {
                     </Link>
                 </article>
 
-                <article className="role-card">
+                <article className="panel role-card">
                     <h3>Gamemaster</h3>
                     <p>
                         Create games, import question sets, manage rounds, and grade submissions. Use your host secret to
@@ -31,7 +31,7 @@ function LandingPage(): JSX.Element {
                     </Link>
                 </article>
 
-                <article className="role-card">
+                <article className="panel role-card">
                     <h3>Scoreboard</h3>
                     <p>
                         Display a projection-friendly scoreboard that updates instantly as the gamemaster awards points.

@@ -29,6 +29,8 @@ and a projector scoreboard.
   manual override. Text answers remain manually graded.
 - A high-contrast Christmas leaderboard uses large scores and up to three columns
   for projector viewing, with shared ranks for ties and a single column on phones.
+- Team, host, grading, and team-management screens share the scoreboard's evergreen,
+  cream, cranberry, and gold theme, with readable forms and distinct grading states.
 - The frontend is served by a Cloudflare Worker. API and WebSocket requests are proxied
   through the same domain to a persistent backend; no cross-domain frontend settings
   are needed.
